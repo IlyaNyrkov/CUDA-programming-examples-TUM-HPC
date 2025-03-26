@@ -1,4 +1,4 @@
-%%cuda --compiler-args=-arch=sm_60
+// --compiler-args=-arch=sm_60
 #include <stdio.h> 
 #include <math.h>
 #include <chrono>

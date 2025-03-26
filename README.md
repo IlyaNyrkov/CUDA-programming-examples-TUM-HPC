@@ -1,12 +1,41 @@
 # CUDA-programming-examples-TUM-HPC
 
-![][cuda-shield] ![][cpp-shield] ![][linux-shield]
+![CUDA][cuda-shield] ![C++][cpp-shield] ![Linux][linux-shield]
 
-This repository contains code examples for CUDA introductory article, written during TUM High Performance Computing course.
+This repository contains a collection of CUDA programs developed for an educational article and the TUM High Performance Computing (HPC) course. The examples demonstrate core CUDA concepts, performance optimization techniques, and GPU-accelerated computation through small, focused programs.
 
+## Structure
 
-[cuda-shield]:https://img.shields.io/badge/Model-CUDA-informational?style=flat&logo=nvidia&logoColor=white&color=2bbc8a
+- `examples/` — All core CUDA examples grouped by topic (reduction, Riemann sum, matrix ops, deadlocks, etc.)
+- `README.md` — You are here.
+- Each folder contains a self-contained `*.cu` example with comments.
 
-[cpp-shield]:https://img.shields.io/badge/Code-C++-informational?style=flat&logo=cplusplus&logoColor=white&color=2bbc8a
+## Topics Covered
 
-[linux-shield]:https://img.shields.io/badge/OS-Linux-informational?style=flat&logo=linux&logoColor=white&color=2bbc8a
+- CUDA thread blocks and kernels
+- Deadlock using atomics and synchronization
+- Sum reduction (with multiple optimization levels)
+- Matrix multiplication (including Tensor Core version)
+- Riemann sum integration using different parallelization techniques
+- Shared vs. global memory usage
+- Unified memory
+- Warp-level primitives
+- Performance comparison (CPU vs. GPU)
+
+---
+
+## 🛠️ Compiler Options
+
+Some programs require special flags:
+
+### For double-precision atomic operations (used in `riemann_sum/*.cu`):
+
+```bash
+nvcc --compiler-args=-arch=sm_60 your_file.cu -o your_program
+```
+
+### For kernel invocation within other kernel (quicksort example)
+
+```bash
+nvcc --compiler-args=-rdc=true your_file.cu -o your_program
+```
