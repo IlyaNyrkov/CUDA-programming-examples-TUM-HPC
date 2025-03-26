@@ -47,17 +47,34 @@ __device__ T logarithm_sin_exp_gpu(T x) {
 template <typename T>
 using func_templ = T (*)(T);
 
-template <typename T, func_templ<T> func>
-__global__ void naiveRiemannSum(T a, T dx, int iterations, T *result) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+template <typename T, T (*func)(T)>
+__global__ void sharedMemoryRiemannSum(T a, T dx, int N, T *result) {
+    __shared__ T sharedMem[BLOCK_SIZE];
+
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    int tid = threadIdx.x;
     T sum = 0.0;
 
-    if (idx < iterations)  {
-        T x = a + idx * dx;
-        atomicAdd(result, func(x) * dx);
+    for (int i = idx; i < N; i += blockDim.x * gridDim.x) {
+        T x = a + i * dx;
+        sum += func(x) * dx;
     }
 
+    sharedMem[tid] = sum;
+    __syncthreads();
+
+    for (int s = BLOCK_SIZE / 2; s > 0; s /= 2) {
+        if (tid < s) {
+            sharedMem[tid] += sharedMem[tid + s];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        atomicAdd(result, sharedMem[0]);
+    }
 }
+
 
 int main() {
     const double a = 0.0, b = 10.0;
@@ -95,13 +112,13 @@ int main() {
 
     printf("\nGPU Results:\n");
 
-    const int BLOCKS = 256;
-    const int THREADS = BLOCK_SIZE;
+    const int THREADS = 256;
+    const int BLOCKS = (N + (THREADS - 1)) / THREADS;
     double dx = (b - a) / N;
 
     *result = 0.0;
     t1 = std::chrono::high_resolution_clock::now();
-    naiveRiemannSum<double, sin_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
+    unrolledRiemannSum<double, sin_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
     cudaDeviceSynchronize();
     t2 = std::chrono::high_resolution_clock::now();
     printf("sin_exp: %.10f (%.6f sec)\n", *result,
@@ -109,7 +126,7 @@ int main() {
 
     *result = 0.0;
     t1 = std::chrono::high_resolution_clock::now();
-    naiveRiemannSum<double, square_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
+    unrolledRiemannSum<double, square_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
     cudaDeviceSynchronize();
     t2 = std::chrono::high_resolution_clock::now();
     printf("square: %.10f (%.6f sec)\n", *result,
@@ -117,7 +134,7 @@ int main() {
 
     *result = 0.0;
     t1 = std::chrono::high_resolution_clock::now();
-    naiveRiemannSum<double, logarithm_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
+    unrolledRiemannSum<double, logarithm_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
     cudaDeviceSynchronize();
     t2 = std::chrono::high_resolution_clock::now();
     printf("log_exp: %.10f (%.6f sec)\n", *result,
@@ -125,7 +142,7 @@ int main() {
 
     *result = 0.0;
     t1 = std::chrono::high_resolution_clock::now();
-    naiveRiemannSum<double, logarithm_sin_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
+    unrolledRiemannSum<double, logarithm_sin_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
     cudaDeviceSynchronize();
     t2 = std::chrono::high_resolution_clock::now();
     printf("log_sin_exp: %.10f (%.6f sec)\n", *result,
