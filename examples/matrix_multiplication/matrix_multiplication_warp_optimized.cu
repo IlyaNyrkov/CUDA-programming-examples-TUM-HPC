@@ -3,30 +3,30 @@
 #include <cuda.h>
 #include <chrono>
 
-__global__ void tiledMatMul(int* A, int* B, int* C, int N) {
-    __shared__ int sharedA[16][16];
-    __shared__ int sharedB[16][16];
+__global__ void warpTiledMatMul(int* A, int* B, int* C, int N) {
+    __shared__ int sharedA[32][32];
+    __shared__ int sharedB[32][32];
 
     int tx = threadIdx.x;
     int ty = threadIdx.y;
-    int row = blockIdx.y * 16 + ty;
-    int col = blockIdx.x * 16 + tx;
+    int row = blockIdx.y * 32 + ty;
+    int col = blockIdx.x * 32 + tx;
 
     int sum = 0;
-    for (int tile = 0; tile < (N + 15) / 16; tile++) {
-        if (row < N && tile * 16 + tx < N)
-            sharedA[ty][tx] = A[row * N + tile * 16 + tx];
+    for (int tile = 0; tile < (N + 15) / 32; tile++) {
+        if (row < N && tile * 32 + tx < N)
+            sharedA[ty][tx] = A[row * N + tile * 32 + tx];
         else
             sharedA[ty][tx] = 0;
 
-        if (col < N && tile * 16 + ty < N)
-            sharedB[ty][tx] = B[(tile * 16 + ty) * N + col];
+        if (col < N && tile * 32 + ty < N)
+            sharedB[ty][tx] = B[(tile * 32 + ty) * N + col];
         else
             sharedB[ty][tx] = 0;
 
         __syncthreads();
 
-        for (int k = 0; k < 16; k++) {
+        for (int k = 0; k < 32; k++) {
             sum += sharedA[ty][k] * sharedB[k][tx];
         }
 
@@ -83,11 +83,11 @@ int main() {
     cudaMemcpy(matrixAGpu, matrixACpu, size, cudaMemcpyHostToDevice);
     cudaMemcpy(matrixBGpu, matrixBCpu, size, cudaMemcpyHostToDevice);
 
-    dim3 threads(16, 16);
+    dim3 threads(32, 32);
     dim3 blocks((N + threads.x - 1) / threads.x, (N + threads.y - 1) / threads.y);
 
     auto start_gpu = std::chrono::high_resolution_clock::now();
-    tiledMatMul<<<blocks, threads>>>(matrixAGpu, matrixBGpu, matrixCGpu, N);
+    warpTiledMatMul<<<blocks, threads>>>(matrixAGpu, matrixBGpu, matrixCGpu, N);
     cudaDeviceSynchronize();
     auto end_gpu = std::chrono::high_resolution_clock::now();
 
@@ -98,7 +98,7 @@ int main() {
     auto end_cpu = std::chrono::high_resolution_clock::now();
 
     printf("Matrix %d x %d\n", N, N);
-    printf("Tiled Method GPU Time: %f seconds\n", std::chrono::duration<double>(end_gpu - start_gpu).count());
+    printf("Warp optimized Method GPU Time: %f seconds\n", std::chrono::duration<double>(end_gpu - start_gpu).count());
     printf("CPU Time:       %f seconds\n", std::chrono::duration<double>(end_cpu - start_cpu).count());
     printf("Result check:   C[0][0] = %d (GPU), %d (CPU)\n", resultMatrixCpu_gpu[0], resultMatrixCpu_cpu[0]);
     printf("CPU and gpu matricies same: %d\n", compareMatricies(resultMatrixCpu_cpu, resultMatrixCpu_gpu, N, N));

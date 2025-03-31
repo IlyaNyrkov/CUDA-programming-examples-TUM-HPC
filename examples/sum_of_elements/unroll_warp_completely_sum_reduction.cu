@@ -79,7 +79,7 @@ int main() {
     const int BLOCK_COUNT = (N + (THREAD_COUNT - 1)) / THREAD_COUNT;
 
     auto start_gpu = chrono::high_resolution_clock::now();
-    unrollWarpCompletelyReduction<<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT>>>(input, output_gpu, N);
+    unrollWarpCompletelyReduction<THREAD_COUNT><<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT>>>(input, output_gpu, N);
     cudaDeviceSynchronize();
     auto end_gpu = chrono::high_resolution_clock::now();
 

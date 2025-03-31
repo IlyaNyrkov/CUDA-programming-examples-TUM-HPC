@@ -28,7 +28,7 @@ void sumCPU(int *input, int *output, int n) {
     }
 }
 
-__global__ void blockSumReduction(int *input, int *output, int n) {
+__global__ void blockSumReduction(int *in, int *out, int n) {
     extern __shared__ int subArray[];
     int tid = threadIdx.x;
     int gid = blockIdx.x * blockDim.x * 2 + threadIdx.x;
@@ -36,11 +36,11 @@ __global__ void blockSumReduction(int *input, int *output, int n) {
     subArray[tid] = 0;
 
     if (gid < n) {
-        subArray[tid] += array[gid];
+        subArray[tid] += in[gid];
     }
 
     if (gid + blockDim.x < n) {
-        subArray[tid] += array[gid + blockDim.x];
+        subArray[tid] += in[gid + blockDim.x];
     }
     __syncthreads();
 
@@ -52,7 +52,7 @@ __global__ void blockSumReduction(int *input, int *output, int n) {
     }
 
     if (tid == 0) {
-        atomicAdd(output, subArray[0]);
+        atomicAdd(out, subArray[0]);
     }
 }
 
@@ -60,7 +60,7 @@ int main() {
     const int N = 1 << 10;
     const int max = 100;
 
-    int* input, output_cpu, output_gpu;
+    int* input, *output_cpu, *output_gpu;
     cudaMallocManaged(&input, N*sizeof(int));
     fill_array(N, 100, input);
     print_array(10, input);

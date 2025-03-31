@@ -27,37 +27,34 @@ void sumCPU(int *input, int *output, int n) {
     }
 }
 
-__device__ void warpReduceUnrolled(volatile int* s, int tid) {
-    s[tid] += s[tid + 32];
-    s[tid] += s[tid + 16];
-    s[tid] += s[tid + 8];
-    s[tid] += s[tid + 4];
-    s[tid] += s[tid + 2];
-    s[tid] += s[tid + 1];
+template <unsigned int blockSize>
+__device__ void warpReduceTemplate(volatile int* s, int tid) {
+    if (blockSize >= 64) s[tid] += s[tid + 32];
+    if (blockSize >= 32) s[tid] += s[tid + 16];
+    if (blockSize >= 16) s[tid] += s[tid + 8];
+    if (blockSize >= 8) s[tid] += s[tid + 4];
+    if (blockSize >= 4) s[tid] += s[tid + 2];
+    if (blockSize >= 2) s[tid] += s[tid + 1];
 }
 
 template <unsigned int blockSize>
-__global__ void gridStrideReduction(int *input, int *output, int n) {
-    extern __shared__ int subArray[];
+__global__ void gridStrideReduction(int *in, int *out, int n) {
+    extern __shared__ int subArr[];
     int tid = threadIdx.x;
-    int index = blockIdx.x * blockDim.x * 2 + threadIdx.x;
-    int stride = gridDim.x * blockDim.x * 2;
-    int sum = 0;
-
-    while (index < n) {
-        sum += input[index];
-        if (index + blockDim.x < n)
-            sum += input[index + blockDim.x];
-        index += stride;
-    }
-    subArray[tid] = sum;
+    int gid = blockIdx.x * blockSize * 2 + threadIdx.x;
+    int gridSize = blockSize * gridDim.x * 2;
+    subArray[tid] = 0;
+   
+    while (gid) { subArr[tid] += in[i] + in[i+blockSize]; i += gridSize; };
     __syncthreads();
+    
 
-    for (int s = blockDim.x / 2; s > 32; s >>= 1) {
-        if (tid < s) subArray[tid] += subArray[tid + s];
-        __syncthreads();
-    }
-    if (tid < 32) warpReduceUnrolled(subArray, tid);
+    // if (blockSize >= 1024) { if (tid < 512) subArray[tid] += subArray[tid + 512]; __syncthreads(); }
+    // if (blockSize >= 512)  { if (tid < 256) subArray[tid] += subArray[tid + 256]; __syncthreads(); }
+    // if (blockSize >= 256)  { if (tid < 128) subArray[tid] += subArray[tid + 128]; __syncthreads(); }
+    if (blockSize >= 128)  { if (tid < 64)  subArray[tid] += subArray[tid + 64];  __syncthreads(); };
+
+    if (tid < 32) warpReduceTemplate<blockSize>(subArray, tid);
     if (tid == 0) atomicAdd(output, subArray[0]);
 }
 
@@ -65,7 +62,7 @@ int main() {
     const int N = 1 << 10;
     const int max = 100;
 
-    int* input, output_cpu, output_gpu;
+    int* input, *output_cpu, *output_gpu;
     cudaMallocManaged(&input, N*sizeof(int));
     fill_array(N, 100, input);
     print_array(10, input);
@@ -83,7 +80,7 @@ int main() {
     const int BLOCK_COUNT = (N + (THREAD_COUNT - 1)) / THREAD_COUNT;
 
     auto start_gpu = chrono::high_resolution_clock::now();
-    gridStrideReduction<<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT>>>(input, output_gpu, N);
+    gridStrideReduction<THREAD_COUNT><<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT>>>(input, output_gpu, N);
     cudaDeviceSynchronize();
     auto end_gpu = chrono::high_resolution_clock::now();
 

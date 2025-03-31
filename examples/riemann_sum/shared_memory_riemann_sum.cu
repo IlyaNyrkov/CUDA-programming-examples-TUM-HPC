@@ -1,4 +1,4 @@
-// --compiler-args=-arch=sm_60
+// -arch=sm_60
 #include <stdio.h> 
 #include <math.h>
 #include <chrono>
@@ -45,6 +45,11 @@ __device__ T logarithm_sin_exp_gpu(T x) {
 }
 
 template <typename T>
+__device__ T complex_kernel_gpu(T x) {
+    return pow(sin(exp(x) + log(x + 1.0)) + sqrt(x * x + 1.0), 2.5) * cos(5.0 * x) / (1.0 + exp(-x));
+}
+
+template <typename T>
 using func_templ = T (*)(T);
 
 template <typename T, T (*func)(T)>
@@ -77,14 +82,14 @@ __global__ void sharedMemoryRiemannSum(T a, T dx, int N, T *result) {
 
 
 int main() {
-    const double a = 0.0, b = 10.0;
+    const double a = 0.1, b = 10.0;
     const int N = 1e7;
 
     double* result;
     cudaMallocManaged(&result, sizeof(double));
 
+    /*
     printf("CPU Results:\n");
-
     double cpu_result;
     auto t1 = std::chrono::high_resolution_clock::now();
     left_riemann_cpu(sin_exp, a, b, N, &cpu_result);
@@ -110,6 +115,8 @@ int main() {
     printf("log_sin_exp: %.10f (%.6f sec)\n", cpu_result,
            std::chrono::duration<double>(t2 - t1).count());
 
+
+    */
     printf("\nGPU Results:\n");
 
     const int THREADS = 256;
@@ -117,16 +124,16 @@ int main() {
     double dx = (b - a) / N;
 
     *result = 0.0;
-    t1 = std::chrono::high_resolution_clock::now();
-    unrolledRiemannSum<double, sin_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
+    auto t1 = std::chrono::high_resolution_clock::now();
+    sharedMemoryRiemannSum<double, sin_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
     cudaDeviceSynchronize();
-    t2 = std::chrono::high_resolution_clock::now();
+    auto t2 = std::chrono::high_resolution_clock::now();
     printf("sin_exp: %.10f (%.6f sec)\n", *result,
            std::chrono::duration<double>(t2 - t1).count());
 
     *result = 0.0;
     t1 = std::chrono::high_resolution_clock::now();
-    unrolledRiemannSum<double, square_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
+    sharedMemoryRiemannSum<double, square_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
     cudaDeviceSynchronize();
     t2 = std::chrono::high_resolution_clock::now();
     printf("square: %.10f (%.6f sec)\n", *result,
@@ -134,7 +141,7 @@ int main() {
 
     *result = 0.0;
     t1 = std::chrono::high_resolution_clock::now();
-    unrolledRiemannSum<double, logarithm_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
+    sharedMemoryRiemannSum<double, logarithm_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
     cudaDeviceSynchronize();
     t2 = std::chrono::high_resolution_clock::now();
     printf("log_exp: %.10f (%.6f sec)\n", *result,
@@ -142,10 +149,18 @@ int main() {
 
     *result = 0.0;
     t1 = std::chrono::high_resolution_clock::now();
-    unrolledRiemannSum<double, logarithm_sin_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
+    sharedMemoryRiemannSum<double, logarithm_sin_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
     cudaDeviceSynchronize();
     t2 = std::chrono::high_resolution_clock::now();
     printf("log_sin_exp: %.10f (%.6f sec)\n", *result,
+           std::chrono::duration<double>(t2 - t1).count());
+
+    *result = 0.0;
+    t1 = std::chrono::high_resolution_clock::now();
+    sharedMemoryRiemannSum<double, complex_kernel_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
+    cudaDeviceSynchronize();
+    t2 = std::chrono::high_resolution_clock::now();
+    printf("complex kernel: %.10f (%.6f sec)\n", *result,
            std::chrono::duration<double>(t2 - t1).count());
 
     cudaFree(result);
