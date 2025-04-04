@@ -7,10 +7,10 @@ using namespace std;
 
 #define BLOCK_SIZE 256   // Tune for your GPU (L40S handles 256–512 well)
 
-void fill_array(int N, int max_val, int* x) {
+void fill_array(int N, int* x) {
     srand(time(0));
     for (int i = 0; i < N; i++) {
-        x[i] = rand() % (max_val + 1);
+        x[i] = 1;
     }
 }
 
@@ -52,14 +52,13 @@ __global__ void blockSumReduction(int *in, int *out, int n) {
 
 int main(int argc, char* argv[]) {
     int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);
-    const int max = 10;
 
     cout << "Summing " << N << " integers using CPU and GPU (Block-wise reduction)\n";
 
     // Allocate and fill input
     int *input;
     cudaMallocManaged(&input, N * sizeof(int));
-    fill_array(N, max, input);
+    fill_array(N, input);
     print_array(min(N, 10), input);
 
     // ------------------ CPU SUM ------------------

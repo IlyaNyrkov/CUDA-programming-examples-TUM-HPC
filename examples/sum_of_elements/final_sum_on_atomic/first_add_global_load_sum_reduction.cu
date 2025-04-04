@@ -5,10 +5,11 @@
 
 using namespace std;
 
-void fill_array(int N, int max_val, int* x) {
-    srand(time(0));
+#define BLOCK_SIZE 256   // Tune for your GPU (L40S handles 256–512 well)
+
+void fill_array(int N, int* x) {
     for (int i = 0; i < N; i++) {
-        x[i] = rand() % (max_val + 1);
+        x[i] = 1;
     }
 }
 
@@ -63,7 +64,6 @@ __global__ void firstAddGlobalLoadReduction(int *in, int *out, int n) {
 
 int main(int argc, char* argv[]) {
     int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);
-    const int max = 10;
 
     cout << "Summing " << N << " integers using CPU and GPU (First Add During Global Load)\n";
 
@@ -75,8 +75,7 @@ int main(int argc, char* argv[]) {
     *output_gpu = 0;
 
     // Fill array
-    fill_array(N, max, input);
-    print_array(min(N, 10), input);
+    fill_array(N, input);
 
     // --- CPU SUM ---
     auto start_cpu = chrono::high_resolution_clock::now();
@@ -88,7 +87,7 @@ int main(int argc, char* argv[]) {
     cout << "CPU Array sum time  : " << cpu_time.count() << " seconds\n";
 
     // --- GPU SUM ---
-    const int THREAD_COUNT = 128;
+    const int THREAD_COUNT = BLOCK_SIZE;
     const int BLOCK_COUNT = (N + THREAD_COUNT * 2 - 1) / (THREAD_COUNT * 2);  // 2 elements per thread
 
     *output_gpu = 0;

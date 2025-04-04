@@ -6,10 +6,13 @@
 
 using namespace std;
 
+#define BLOCK_SIZE 256   // Tune for your GPU (L40S handles 256–512 well)
+
+
 void fill_array(int N, int max_val, int* x) {
     srand(time(0));
     for (int i = 0; i < N; i++) {
-        x[i] = rand() % (max_val + 1);
+        x[i] = 1;
     }
 }
 
@@ -37,7 +40,6 @@ void sumCPU(int *input, int *output, int n) {
 int main(int argc, char* argv[]) {
     // Default number of elements: 2^30
     int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);
-    const int max_val = 10;
 
     if (N <= 0) {
         cerr << "Invalid number of elements. Must be a positive integer.\n";
@@ -54,9 +56,7 @@ int main(int argc, char* argv[]) {
     *output_gpu = 0;
 
     // Fill and display input
-    fill_array(N, max_val, input);
-    print_array(min(N, 10), input);  // Print first 10 elements
-
+    fill_array(N, input);
     // --- CPU SUM ---
     auto start_cpu = chrono::high_resolution_clock::now();
     sumCPU(input, &output_cpu, N);
@@ -67,7 +67,7 @@ int main(int argc, char* argv[]) {
     cout << "CPU Array sum time  : " << cpu_time.count() << " seconds\n";
 
     // --- GPU SUM ---
-    const int THREAD_COUNT = 128;
+    const int THREAD_COUNT = BLOCK_SIZE;
     const int BLOCK_COUNT = (N + THREAD_COUNT - 1) / THREAD_COUNT;
 
     *output_gpu = 0;

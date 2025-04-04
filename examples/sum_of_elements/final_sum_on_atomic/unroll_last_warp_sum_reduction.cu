@@ -5,10 +5,13 @@
 
 using namespace std;
 
+#define BLOCK_SIZE 256   // Tune for your GPU (L40S handles 256–512 well)
+
+
 void fill_array(int N, int max_val, int* x) {
     srand(time(0));
     for (int i = 0; i < N; i++) {
-        x[i] = rand() % (max_val + 1);
+        x[i] = 1;
     }
 }
 
@@ -68,7 +71,6 @@ __global__ void unrollLastWarpReduction(int *in, int *out, int n) {
 int main(int argc, char* argv[]) {
     // Use argument or default to 1024 elements
     int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);
-    const int max = 10;
 
     cout << "Summing " << N << " integers (last-warp unroll)\n";
 
@@ -78,12 +80,11 @@ int main(int argc, char* argv[]) {
     cudaMallocManaged(&out_gpu, sizeof(int));
     *out_gpu = 0;
 
-    fill_array(N, max, in);
-    print_array(min(N, 10), in);
+    fill_array(N, in);
 
 
     // --- GPU Reduction ---
-    const int THREAD_COUNT = 128;
+    const int THREAD_COUNT = BLOCK_SIZE;
     const int BLOCK_COUNT = (N + THREAD_COUNT * 2 - 1) / (THREAD_COUNT * 2);
 
     *out_gpu = 0;

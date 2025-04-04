@@ -5,10 +5,13 @@
 
 using namespace std;
 
+#define BLOCK_SIZE 256   // Tune for your GPU (L40S handles 256–512 well)
+
+
 void fill_array(int N, int max_val, int* x) {
     srand(time(0));
     for (int i = 0; i < N; i++) {
-        x[i] = rand() % (max_val + 1);
+        x[i] = 1;
     }
 }
 
@@ -49,8 +52,8 @@ __global__ void unrollWarpCompletelyReduction(int *input, int *output, int n) {
     __syncthreads();
 
     // if (blockSize >= 1024) { if (tid < 512) subArray[tid] += subArray[tid + 512]; __syncthreads(); }
-    // if (blockSize >= 512)  { if (tid < 256) subArray[tid] += subArray[tid + 256]; __syncthreads(); }
-    // if (blockSize >= 256)  { if (tid < 128) subArray[tid] += subArray[tid + 128]; __syncthreads(); }
+    if (blockSize >= 512)  { if (tid < 256) subArray[tid] += subArray[tid + 256]; __syncthreads(); }
+    if (blockSize >= 256)  { if (tid < 128) subArray[tid] += subArray[tid + 128]; __syncthreads(); }
     if (blockSize >= 128)  { if (tid < 64)  subArray[tid] += subArray[tid + 64];  __syncthreads(); }
 
     if (tid < 32) warpReduceTemplate<blockSize>(subArray, tid);
@@ -60,7 +63,6 @@ __global__ void unrollWarpCompletelyReduction(int *input, int *output, int n) {
 int main(int argc, char* argv[]) {
     // Default number of elements
     int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);
-    const int max_val = 10;
 
     if (N <= 0) {
         cerr << "Invalid number of elements.\n";
@@ -77,8 +79,7 @@ int main(int argc, char* argv[]) {
     *output_gpu = 0;
 
     // Fill and print input
-    fill_array(N, max_val, input);
-    print_array(min(N, 10), input);
+    fill_array(N, input);
 
     // --- CPU SUM ---
     auto start_cpu = chrono::high_resolution_clock::now();
@@ -90,7 +91,7 @@ int main(int argc, char* argv[]) {
     cout << "CPU Array sum time  : " << cpu_time.count() << " seconds\n";
 
     // --- GPU SUM ---
-    const int THREAD_COUNT = 128;
+    const int THREAD_COUNT = BLOCK_SIZE;
     const int BLOCK_COUNT = (N + THREAD_COUNT * 2 - 1) / (THREAD_COUNT * 2);  // 2x unrolling
 
     *output_gpu = 0;
