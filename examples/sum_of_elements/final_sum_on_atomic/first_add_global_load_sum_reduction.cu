@@ -61,36 +61,49 @@ __global__ void firstAddGlobalLoadReduction(int *in, int *out, int n) {
     }
 }
 
-int main() {
-    const int N = 1 << 10;
-    const int max = 100;
+int main(int argc, char* argv[]) {
+    int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);
+    const int max = 10;
 
-    int* input, *output_cpu, *output_gpu;
-    cudaMallocManaged(&input, N*sizeof(int));
-    fill_array(N, 100, input);
-    print_array(10, input);
+    cout << "Summing " << N << " integers using CPU and GPU (First Add During Global Load)\n";
 
+    // Allocate unified memory
+    int *input, *output_gpu;
+    int output_cpu = 0;
+    cudaMallocManaged(&input, N * sizeof(int));
+    cudaMallocManaged(&output_gpu, sizeof(int));
+    *output_gpu = 0;
+
+    // Fill array
+    fill_array(N, max, input);
+    print_array(min(N, 10), input);
+
+    // --- CPU SUM ---
     auto start_cpu = chrono::high_resolution_clock::now();
-    sumCPU(input, output_cpu, N);
+    sumCPU(input, &output_cpu, N);
     auto end_cpu = chrono::high_resolution_clock::now();
-
     chrono::duration<double> cpu_time = end_cpu - start_cpu;
 
-    cout << "CPU Array sum time: " << cpu_time.count() << " seconds" << endl;
-    cout << "CPU Array sum result: " << *output_cpu << endl; 
+    cout << "CPU Array sum result: " << output_cpu << endl;
+    cout << "CPU Array sum time  : " << cpu_time.count() << " seconds\n";
 
+    // --- GPU SUM ---
     const int THREAD_COUNT = 128;
-    const int BLOCK_COUNT = (N + (THREAD_COUNT - 1)) / THREAD_COUNT;
+    const int BLOCK_COUNT = (N + THREAD_COUNT * 2 - 1) / (THREAD_COUNT * 2);  // 2 elements per thread
 
+    *output_gpu = 0;
     auto start_gpu = chrono::high_resolution_clock::now();
-    firstAddGlobalLoadReduction<<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT>>>(input, output_gpu, N);
+    firstAddGlobalLoadReduction<<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT * sizeof(int)>>>(input, output_gpu, N);
     cudaDeviceSynchronize();
     auto end_gpu = chrono::high_resolution_clock::now();
-
     chrono::duration<double> gpu_time = end_gpu - start_gpu;
 
-    cout << "GPU Array sum time: " << gpu_time.count() << " seconds" << endl;
-    cout << "GPU Array sum result: " << *output_gpu << endl; 
+    cout << "GPU Array sum result: " << *output_gpu << endl;
+    cout << "GPU Array sum time  : " << gpu_time.count() << " seconds\n";
 
+    // Cleanup
+    cudaFree(input);
+    cudaFree(output_gpu);
 
+    return 0;
 }

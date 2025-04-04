@@ -65,36 +65,40 @@ __global__ void unrollLastWarpReduction(int *in, int *out, int n) {
 }
 
 
-int main() {
-    const int N = 1 << 10;
-    const int max = 100;
+int main(int argc, char* argv[]) {
+    // Use argument or default to 1024 elements
+    int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);
+    const int max = 10;
 
-    int* in, out_cpu, out_gpu;
-    cudaMallocManaged(&in, N*sizeof(int));
-    fill_array(N, 100, in);
-    print_array(10, in);
+    cout << "Summing " << N << " integers (last-warp unroll)\n";
 
-    auto start_cpu = chrono::high_resolution_clock::now();
-    sumCPU(in, out_cpu, N);
-    auto end_cpu = chrono::high_resolution_clock::now();
+    // Allocate unified memory
+    int *in, *out_gpu;
+    cudaMallocManaged(&in, N * sizeof(int));
+    cudaMallocManaged(&out_gpu, sizeof(int));
+    *out_gpu = 0;
 
-    chrono::duration<double> cpu_time = end_cpu - start_cpu;
+    fill_array(N, max, in);
+    print_array(min(N, 10), in);
 
-    cout << "CPU Array sum time: " << cpu_time.count() << " seconds" << endl;
-    cout << "CPU Array sum result: " << *out_cpu << endl; 
 
+    // --- GPU Reduction ---
     const int THREAD_COUNT = 128;
-    const int BLOCK_COUNT = (N + (THREAD_COUNT - 1)) / THREAD_COUNT;
+    const int BLOCK_COUNT = (N + THREAD_COUNT * 2 - 1) / (THREAD_COUNT * 2);
 
+    *out_gpu = 0;
     auto start_gpu = chrono::high_resolution_clock::now();
-    unrollLastWarpReduction<<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT>>>(in, out_gpu, N);
+    unrollLastWarpReduction<<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT * sizeof(int)>>>(in, out_gpu, N);
     cudaDeviceSynchronize();
     auto end_gpu = chrono::high_resolution_clock::now();
-
     chrono::duration<double> gpu_time = end_gpu - start_gpu;
 
-    cout << "GPU Array sum time: " << gpu_time.count() << " seconds" << endl;
-    cout << "GPU Array sum result: " << *out_gpu << endl; 
+    cout << "GPU Array sum result: " << *out_gpu << endl;
+    cout << "GPU Array sum time  : " << gpu_time.count() << " seconds\n";
 
+    // Cleanup
+    cudaFree(in);
+    cudaFree(out_gpu);
 
+    return 0;
 }
