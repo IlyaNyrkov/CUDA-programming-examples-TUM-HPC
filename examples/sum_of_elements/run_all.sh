@@ -17,7 +17,7 @@ done
 
 # Run binaries in final_sum_on_atomic
 echo "🔹 Running binaries in final_sum_on_atomic:"
-for bin in inal_sum_on_atomic/*; do
+for bin in final_sum_on_atomic/*; do
     if [[ -x "$bin" && ! "$bin" =~ \.cu$ ]]; then
         echo "▶️  $bin"
         "$bin" "$N"

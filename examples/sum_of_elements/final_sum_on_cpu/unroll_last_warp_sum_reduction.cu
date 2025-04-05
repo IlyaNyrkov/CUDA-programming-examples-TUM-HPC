@@ -4,7 +4,7 @@
 
 using namespace std;
 
-#define BLOCK_SIZE 256  // L40S optimal config
+#define BLOCK_SIZE 256  // L40S/H100 optimal: 256–512
 
 void fill_array(int N, int* x) {
     for (int i = 0; i < N; i++) {

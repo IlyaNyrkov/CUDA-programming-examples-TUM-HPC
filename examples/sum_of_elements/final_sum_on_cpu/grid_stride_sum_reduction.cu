@@ -4,7 +4,14 @@
 
 using namespace std;
 
-#define BLOCK_SIZE 256  // Optimal for L40S / H100
+#define BLOCK_SIZE 256  // L40S/H100 optimal: 256–512
+
+void fill_array(int N, int* x) {
+    for (int i = 0; i < N; i++) { 
+        x[i] = rand() % 10;
+    }
+}
+
 
 template <unsigned int blockSize>
 __device__ void warpReduceTemplate(volatile int* s, int tid) {
@@ -41,13 +48,6 @@ __global__ void gridStrideReduction(int *input, int *partialSums, int n) {
     if (tid < 32) warpReduceTemplate<blockSize>(shared, tid);
 
     if (tid == 0) partialSums[blockIdx.x] = shared[0];
-}
-
-void fill_array(int N, int* x) {
-    srand(time(0));
-    for (int i = 0; i < N; i++) { 
-        x[i] = rand() % 10;
-    }
 }
 
 int main(int argc, char* argv[]) {

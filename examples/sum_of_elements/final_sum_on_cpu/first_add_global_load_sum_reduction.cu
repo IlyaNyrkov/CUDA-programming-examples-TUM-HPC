@@ -8,7 +8,7 @@ using namespace std;
 
 void fill_array(int N, int* x) {
     for (int i = 0; i < N; i++) {
-        x[i] = 1;
+        x[i] = rand() % 10;
     }
 }
 
