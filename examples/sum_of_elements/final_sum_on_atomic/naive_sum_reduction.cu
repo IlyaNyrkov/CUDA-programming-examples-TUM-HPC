@@ -9,10 +9,9 @@ using namespace std;
 #define BLOCK_SIZE 256   // Tune for your GPU (L40S handles 256–512 well)
 
 
-void fill_array(int N, int max_val, int* x) {
-    srand(time(0));
+void fill_array(int N, int* x) {
     for (int i = 0; i < N; i++) {
-        x[i] = 1;
+        x[i] = rand();
     }
 }
 
