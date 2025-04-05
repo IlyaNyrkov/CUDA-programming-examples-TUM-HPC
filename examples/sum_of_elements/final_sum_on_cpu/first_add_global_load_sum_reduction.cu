@@ -1,30 +1,14 @@
 #include <stdio.h>
-#include <time.h>
 #include <iostream>
 #include <chrono>
 
 using namespace std;
 
-#define BLOCK_SIZE 256   // Tune for your GPU (L40S handles 256–512 well)
+#define BLOCK_SIZE 256  // L40S/H100 optimal: 256–512
 
 void fill_array(int N, int* x) {
-    srand(time(0));
     for (int i = 0; i < N; i++) {
         x[i] = 1;
-    }
-}
-
-void print_array(int N, int* x) {
-    printf("printing first %d elements: ", N);
-    for (int i = 0; i < N; i++) {
-        printf("%d ", x[i]);
-    }
-    printf("\n");
-}
-
-void sumCPU(int *input, int *output, int n) {
-    for (int i = 0; i < n; i++) {
-        (*output) += input[i];
     }
 }
 
@@ -47,52 +31,41 @@ __global__ void firstAddGlobalLoadReduction(int *in, int *partialSums, int n) {
     }
 
     if (tid == 0) {
-        partialSums[blockIdx.x] = subArr[0];  // Store one sum per block
+        partialSums[blockIdx.x] = subArr[0];
     }
 }
 
 int main(int argc, char* argv[]) {
-    int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);  // Default: 2^28 elements
+    int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);  // Default: 268M elements
 
-    cout << "Summing " << N << " integers using First-Add-Global-Load kernel\n";
+    cout << "Summing " << N << " integers using First-Add-Global-Load (GPU-only + CPU final sum)\n";
 
-    // Allocate unified memory
+    // Allocate and fill data
     int *input;
     cudaMallocManaged(&input, N * sizeof(int));
     fill_array(N, input);
 
-    // ---------------- CPU SUM ----------------
-    int output_cpu = 0;
-    auto start_cpu = chrono::high_resolution_clock::now();
-    sumCPU(input, &output_cpu, N);
-    auto end_cpu = chrono::high_resolution_clock::now();
-    chrono::duration<double> cpu_time = end_cpu - start_cpu;
-
-    cout << "CPU Array sum result: " << output_cpu << endl;
-    cout << "CPU Array sum time  : " << cpu_time.count() << " seconds\n";
-
-    // ---------------- GPU SUM ----------------
+    // Kernel config
     const int THREAD_COUNT = BLOCK_SIZE;
     const int BLOCK_COUNT = (N + THREAD_COUNT * 2 - 1) / (THREAD_COUNT * 2);
 
     int *partial_sums;
     cudaMallocManaged(&partial_sums, BLOCK_COUNT * sizeof(int));
 
+    // GPU benchmark (includes CPU final sum)
     auto start_gpu = chrono::high_resolution_clock::now();
     firstAddGlobalLoadReduction<<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT * sizeof(int)>>>(input, partial_sums, N);
     cudaDeviceSynchronize();
 
-    // Final CPU sum of block results
     long long final_sum = 0;
     for (int i = 0; i < BLOCK_COUNT; i++) {
         final_sum += partial_sums[i];
     }
-
     auto end_gpu = chrono::high_resolution_clock::now();
     chrono::duration<double> gpu_time = end_gpu - start_gpu;
 
-    cout << "GPU Array sum result: " << final_sum << endl;
-    cout << "GPU total reduction time: " << gpu_time.count() << " seconds\n";
+    cout << "GPU Array sum result       : " << final_sum << endl;
+    cout << "GPU total reduction time   : " << gpu_time.count() << " seconds\n";
 
     // Cleanup
     cudaFree(input);

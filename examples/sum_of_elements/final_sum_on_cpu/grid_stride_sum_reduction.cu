@@ -1,32 +1,10 @@
 #include <stdio.h>
-#include <time.h>
 #include <iostream>
 #include <chrono>
 
 using namespace std;
 
-#define BLOCK_SIZE 256  // Tune for your GPU (L40S handles 256–512 well)
-
-void fill_array(int N, int* x) {
-    srand(time(0));
-    for (int i = 0; i < N; i++) {
-        x[i] = 1;
-    }
-}
-
-void print_array(int N, int* x) {
-    printf("printing first %d elements: ", N);
-    for (int i = 0; i < N; i++) {
-        printf("%d ", x[i]);
-    }
-    printf("\n");
-}
-
-void sumCPU(int *input, int *output, int n) {
-    for (int i = 0; i < n; i++) {
-        (*output) += input[i];
-    }
-}
+#define BLOCK_SIZE 256  // Optimal for L40S / H100
 
 template <unsigned int blockSize>
 __device__ void warpReduceTemplate(volatile int* s, int tid) {
@@ -65,32 +43,30 @@ __global__ void gridStrideReduction(int *input, int *partialSums, int n) {
     if (tid == 0) partialSums[blockIdx.x] = shared[0];
 }
 
+void fill_array(int N, int* x) {
+    srand(time(0));
+    for (int i = 0; i < N; i++) { 
+        x[i] = rand() % 10;
+    }
+}
+
 int main(int argc, char* argv[]) {
-    int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);  // ~268M elements
+    int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);  // 268M elements
+    cout << "Summing " << N << " integers using Grid-stride + Warp unroll (GPU only)\n";
 
-    cout << "Summing " << N << " integers using CPU and GPU (Grid-stride + Warp unroll)\n";
-
-    // Allocate unified memory
+    // Allocate input and fill
     int *input;
     cudaMallocManaged(&input, N * sizeof(int));
-    fill_array(N, max, input);
+    fill_array(N, input);
 
-    // --- CPU SUM ---
-    int output_cpu = 0;
-    auto start_cpu = chrono::high_resolution_clock::now();
-    sumCPU(input, &output_cpu, N);
-    auto end_cpu = chrono::high_resolution_clock::now();
-    chrono::duration<double> cpu_time = end_cpu - start_cpu;
-    cout << "CPU Array sum result: " << output_cpu << endl;
-    cout << "CPU Array sum time  : " << cpu_time.count() << " seconds\n";
-
-    // --- GPU SUM ---
+    // Configure kernel
     const int THREAD_COUNT = BLOCK_SIZE;
     const int BLOCK_COUNT = (N + THREAD_COUNT * 2 - 1) / (THREAD_COUNT * 2);
 
     int* partialSums;
     cudaMallocManaged(&partialSums, BLOCK_COUNT * sizeof(int));
 
+    // --- GPU + CPU final sum timing ---
     auto start_gpu = chrono::high_resolution_clock::now();
     gridStrideReduction<THREAD_COUNT><<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT * sizeof(int)>>>(input, partialSums, N);
     cudaDeviceSynchronize();
@@ -99,12 +75,11 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < BLOCK_COUNT; ++i) {
         gpu_result += partialSums[i];
     }
-
     auto end_gpu = chrono::high_resolution_clock::now();
     chrono::duration<double> gpu_time = end_gpu - start_gpu;
 
-    cout << "GPU Array sum result: " << gpu_result << endl;
-    cout << "GPU Array sum time  : " << gpu_time.count() << " seconds\n";
+    cout << "GPU Array sum result       : " << gpu_result << endl;
+    cout << "GPU total reduction time   : " << gpu_time.count() << " seconds\n";
 
     // Cleanup
     cudaFree(input);

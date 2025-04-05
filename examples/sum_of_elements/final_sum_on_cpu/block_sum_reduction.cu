@@ -1,30 +1,14 @@
 #include <stdio.h>
-#include <time.h>
 #include <iostream>
 #include <chrono>
 
 using namespace std;
 
-#define BLOCK_SIZE 256   // Tune for your GPU (L40S handles 256–512 well)
+#define BLOCK_SIZE 256  // Tune for your GPU (256–512 is good for L40S)
 
 void fill_array(int N, int* x) {
-    srand(time(0));
     for (int i = 0; i < N; i++) {
         x[i] = 1;
-    }
-}
-
-void print_array(int N, int* x) {
-    printf("printing first %d elements: ", N);
-    for (int i = 0; i < N; i++) {
-        printf("%d ", x[i]);
-    }
-    printf("\n");
-}
-
-void sumCPU(int *input, int *output, int n) {
-    for (int i = 0; i < n; i++) {
-        (*output) += input[i];
     }
 }
 
@@ -46,32 +30,21 @@ __global__ void blockSumReduction(int *in, int *out, int n) {
     }
 
     if (tid == 0) {
-        out[blockIdx.x] = subArray[0]; // Store per-block result
+        out[blockIdx.x] = subArray[0]; // Write per-block sum
     }
 }
 
 int main(int argc, char* argv[]) {
-    int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);
+    int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);  // Default: 268M ints
 
-    cout << "Summing " << N << " integers using CPU and GPU (Block-wise reduction)\n";
+    cout << "Summing " << N << " integers using GPU (Block-wise shared memory + final CPU sum)\n";
 
     // Allocate and fill input
     int *input;
     cudaMallocManaged(&input, N * sizeof(int));
     fill_array(N, input);
-    print_array(min(N, 10), input);
 
-    // ------------------ CPU SUM ------------------
-    int output_cpu = 0;
-    auto start_cpu = chrono::high_resolution_clock::now();
-    sumCPU(input, &output_cpu, N);
-    auto end_cpu = chrono::high_resolution_clock::now();
-    chrono::duration<double> cpu_time = end_cpu - start_cpu;
-
-    cout << "CPU Array sum result: " << output_cpu << endl;
-    cout << "CPU Array sum time  : " << cpu_time.count() << " seconds\n";
-
-    // ------------------ GPU SUM ------------------
+    // --- GPU Kernel Launch ---
     const int THREAD_COUNT = BLOCK_SIZE;
     const int BLOCK_COUNT = (N + THREAD_COUNT * 2 - 1) / (THREAD_COUNT * 2);
 
@@ -82,7 +55,7 @@ int main(int argc, char* argv[]) {
     blockSumReduction<<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT * sizeof(int)>>>(input, partial_sums, N);
     cudaDeviceSynchronize();
 
-    // Final reduction on CPU
+    // Final CPU sum of partial results
     long long final_sum = 0;
     for (int i = 0; i < BLOCK_COUNT; i++) {
         final_sum += partial_sums[i];
@@ -90,8 +63,9 @@ int main(int argc, char* argv[]) {
     auto end_gpu = chrono::high_resolution_clock::now();
     chrono::duration<double> gpu_time = end_gpu - start_gpu;
 
-    cout << "GPU Array sum result: " << final_sum << endl;
-    cout << "GPU total reduction time: " << gpu_time.count() << " seconds\n";
+    // Output
+    cout << "GPU Array sum result       : " << final_sum << endl;
+    cout << "Total GPU reduction time   : " << gpu_time.count() << " seconds\n";
 
     // Cleanup
     cudaFree(input);

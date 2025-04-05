@@ -1,48 +1,34 @@
 #include <stdio.h>
-#include <time.h>
 #include <iostream>
 #include <chrono>
 
 using namespace std;
 
-#define BLOCK_SIZE 256   // Tune for your GPU (L40S handles 256–512 well)
+#define BLOCK_SIZE 256  // L40S optimal range is 256–512
 
 void fill_array(int N, int* x) {
     for (int i = 0; i < N; i++) {
-        x[i] = 1;
+        x[i] = rand() % 10;
     }
 }
 
 void print_array(int N, int* x) {
-    printf("printing first %d elements", N);
+    printf("printing first %d elements: ", N);
     for (int i = 0; i < N; i++) {
         printf("%d ", x[i]);
     }
-
     printf("\n");
 }
 
-
-void sumCPU(int *input, int *output, int n) {
-    for (int i = 0; i < n; i++) {
-        (*output) += input[i];
-    }
-}
-
-__global__ void blockSumReduction(int *in, int *out, int n) {
+__global__ void blockSumAtomicAdd(int *in, int *globalSum, int n) {
     extern __shared__ int subArray[];
     int tid = threadIdx.x;
     int gid = blockIdx.x * blockDim.x * 2 + threadIdx.x;
 
     subArray[tid] = 0;
 
-    if (gid < n) {
-        subArray[tid] += in[gid];
-    }
-
-    if (gid + blockDim.x < n) {
-        subArray[tid] += in[gid + blockDim.x];
-    }
+    if (gid < n) subArray[tid] += in[gid];
+    if (gid + blockDim.x < n) subArray[tid] += in[gid + blockDim.x];
     __syncthreads();
 
     for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
@@ -53,50 +39,36 @@ __global__ void blockSumReduction(int *in, int *out, int n) {
     }
 
     if (tid == 0) {
-        atomicAdd(out, subArray[0]);
+        atomicAdd(globalSum, subArray[0]);
     }
 }
 
 int main(int argc, char* argv[]) {
-    int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);
+    int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);  // Default: ~268M elements
+    cout << "Summing " << N << " integers using GPU (Block-wise reduction with atomicAdd)\n";
 
-    cout << "Summing " << N << " integers using CPU and GPU (Block-wise reduction)\n";
-
-    // Allocate unified memory
-    int *input, *output_gpu;
-    int output_cpu = 0;
+    int *input, *globalSum;
     cudaMallocManaged(&input, N * sizeof(int));
-    cudaMallocManaged(&output_gpu, sizeof(int));
-    *output_gpu = 0;
+    cudaMallocManaged(&globalSum, sizeof(int));
+    *globalSum = 0;
 
     fill_array(N, input);
 
-    // --- CPU SUM ---
-    auto start_cpu = chrono::high_resolution_clock::now();
-    sumCPU(input, &output_cpu, N);
-    auto end_cpu = chrono::high_resolution_clock::now();
-    chrono::duration<double> cpu_time = end_cpu - start_cpu;
-
-    cout << "CPU Array sum result: " << output_cpu << endl;
-    cout << "CPU Array sum time  : " << cpu_time.count() << " seconds" << endl;
-
-    // --- GPU SUM ---
     const int THREAD_COUNT = BLOCK_SIZE;
-    const int BLOCK_COUNT = (N + THREAD_COUNT * 2 - 1) / (THREAD_COUNT * 2); // 2 elements per thread
+    const int BLOCK_COUNT = (N + THREAD_COUNT * 2 - 1) / (THREAD_COUNT * 2);
 
-    *output_gpu = 0;
     auto start_gpu = chrono::high_resolution_clock::now();
-    blockSumReduction<<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT * sizeof(int)>>>(input, output_gpu, N);
+    blockSumAtomicAdd<<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT * sizeof(int)>>>(input, globalSum, N);
     cudaDeviceSynchronize();
     auto end_gpu = chrono::high_resolution_clock::now();
     chrono::duration<double> gpu_time = end_gpu - start_gpu;
 
-    cout << "GPU Array sum result: " << *output_gpu << endl;
-    cout << "GPU Array sum time  : " << gpu_time.count() << " seconds" << endl;
+    cout << "GPU Array sum result: " << *globalSum << endl;
+    cout << "Total GPU reduction time (atomicAdd only): " << gpu_time.count() << " seconds\n";
 
     // Cleanup
     cudaFree(input);
-    cudaFree(output_gpu);
+    cudaFree(globalSum);
 
     return 0;
 }
