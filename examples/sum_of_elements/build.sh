@@ -14,4 +14,11 @@ for file in final_sum_on_atomic/*.cu; do
     nvcc "$file" -o "final_sum_on_atomic/$filename"
 done
 
+# Build CUDA files in cudaMalloc
+echo "🔧 Building cudaMalloc..."
+for file in cudaMalloc/*.cu; do
+    filename=$(basename "$file" .cu)
+    nvcc "$file" -o "final_sum_on_atomic/$filename"
+done
+
 echo "✅ Build complete."

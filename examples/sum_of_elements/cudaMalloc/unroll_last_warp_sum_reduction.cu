@@ -4,7 +4,7 @@
 
 using namespace std;
 
-#define BLOCK_SIZE 256   // Recommended for L40S/H100
+#define BLOCK_SIZE 256  // L40S/H100 optimal: 256–512
 
 void fill_array(int N, int* x) {
     for (int i = 0; i < N; i++) {
@@ -42,7 +42,7 @@ __global__ void unrollLastWarpReduction(int *in, int *partialSums, int n) {
     if (tid < 32) warpReduceUnrolled(subArray, tid);
 
     if (tid == 0) {
-        partialSums[blockIdx.x] = subArray[0];  // Write result to global memory
+        partialSums[blockIdx.x] = subArray[0];
     }
 }
 
@@ -50,39 +50,46 @@ int main(int argc, char* argv[]) {
     int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);  // Default: 268M elements
     cout << "Summing " << N << " integers (Last-Warp Unroll + CPU final sum)\n";
 
-    // Allocate and fill input
-    int* input;
-    cudaMallocManaged(&input, N * sizeof(int));
-    fill_array(N, input);
+    // Allocate host memory
+    int *h_input = (int*) malloc(N * sizeof(int));
+    fill_array(N, h_input);
 
-    // Kernel config
+    // Allocate device memory
+    int *d_input;
+    cudaMalloc(&d_input, N * sizeof(int));
+    cudaMemcpy(d_input, h_input, N * sizeof(int), cudaMemcpyHostToDevice);
+
     const int THREAD_COUNT = BLOCK_SIZE;
     const int BLOCK_COUNT = (N + THREAD_COUNT * 2 - 1) / (THREAD_COUNT * 2);
 
-    int* partialSums;
-    cudaMallocManaged(&partialSums, BLOCK_COUNT * sizeof(int));
+    int *d_partialSums;
+    int *h_partialSums = (int*) malloc(BLOCK_COUNT * sizeof(int));
+    cudaMalloc(&d_partialSums, BLOCK_COUNT * sizeof(int));
 
-    // Launch and time kernel
+    // GPU timing
     auto start_gpu = chrono::high_resolution_clock::now();
-    unrollLastWarpReduction<<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT * sizeof(int)>>>(input, partialSums, N);
+    unrollLastWarpReduction<<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT * sizeof(int)>>>(d_input, d_partialSums, N);
     cudaDeviceSynchronize();
+    auto end_gpu = chrono::high_resolution_clock::now();
 
-    // Final sum on CPU
+    // Copy result back and sum on CPU
+    cudaMemcpy(h_partialSums, d_partialSums, BLOCK_COUNT * sizeof(int), cudaMemcpyDeviceToHost);
     long long final_sum = 0;
     for (int i = 0; i < BLOCK_COUNT; i++) {
-        final_sum += partialSums[i];
+        final_sum += h_partialSums[i];
     }
 
-    auto end_gpu = chrono::high_resolution_clock::now();
     chrono::duration<double> gpu_time = end_gpu - start_gpu;
 
-    // Output results
+    // Output
     cout << "GPU Array sum result : " << final_sum << endl;
     cout << "GPU Array sum time   : " << gpu_time.count() << " seconds\n";
 
     // Cleanup
-    cudaFree(input);
-    cudaFree(partialSums);
+    cudaFree(d_input);
+    cudaFree(d_partialSums);
+    free(h_input);
+    free(h_partialSums);
 
     return 0;
 }
