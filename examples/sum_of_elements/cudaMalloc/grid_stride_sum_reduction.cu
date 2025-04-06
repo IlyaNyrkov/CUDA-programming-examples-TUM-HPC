@@ -29,14 +29,13 @@ __global__ void gridStrideReduction(int *input, int *partialSums, int n) {
     int tid = threadIdx.x;
     int index = blockIdx.x * blockDim.x * 2 + threadIdx.x;
     int gridSize = blockDim.x * gridDim.x * 2;
+    shared[tid] = 0;
 
-    int sum = 0;
     while (index < n) {
-        shared[tid] += input[index] + input[index + blockSize]
+        shared[tid] += input[index] + input[index + blockSize];
         index += gridSize;
     }
 
-    shared[tid] = sum;
     __syncthreads();
 
     if (blockSize >= 512) { if (tid < 256) shared[tid] += shared[tid + 256]; __syncthreads(); }

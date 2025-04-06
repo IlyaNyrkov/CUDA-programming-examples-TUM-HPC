@@ -36,6 +36,8 @@ __global__ void unrollWarpCompletelyReduction(int *input, int *partialSums, int 
     subArray[tid] = sum;
     __syncthreads();
 
+    if (blockSize >= 512) { if (tid < 256) subArray[tid] += subArray[tid + 256]; __syncthreads(); }
+    if (blockSize >= 256) { if (tid < 128) subArray[tid] += subArray[tid + 128]; __syncthreads(); }
     if (blockSize >= 128) { if (tid < 64) subArray[tid] += subArray[tid + 64]; __syncthreads(); }
 
     if (tid < 32) warpReduceTemplate<blockSize>(subArray, tid);

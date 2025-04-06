@@ -64,88 +64,29 @@ __global__ void naiveRiemannSum(T a, T dx, int iterations, T *result) {
 
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     const double a = 0.1, b = 10.0;
-    const int N = 1e9;
-
-    double* result;
-    cudaMallocManaged(&result, sizeof(double));
-
-    printf("CPU Results:\n");
-
-    double cpu_result;
-    auto t1 = std::chrono::high_resolution_clock::now();
-    left_riemann_cpu(sin_exp, a, b, N, &cpu_result);
-    auto t2 = std::chrono::high_resolution_clock::now();
-    printf("sin_exp: %.10f (%.6f sec)\n", cpu_result,
-           std::chrono::duration<double>(t2 - t1).count());
-
-    t1 = std::chrono::high_resolution_clock::now();
-    left_riemann_cpu(square, a, b, N, &cpu_result);
-    t2 = std::chrono::high_resolution_clock::now();
-    printf("square: %.10f (%.6f sec)\n", cpu_result,
-           std::chrono::duration<double>(t2 - t1).count());
-
-    t1 = std::chrono::high_resolution_clock::now();
-    left_riemann_cpu(logarithm_exp, a, b, N, &cpu_result);
-    t2 = std::chrono::high_resolution_clock::now();
-    printf("log_exp: %.10f (%.6f sec)\n", cpu_result,
-           std::chrono::duration<double>(t2 - t1).count());
-
-    t1 = std::chrono::high_resolution_clock::now();
-    left_riemann_cpu(logarithm_sin_exp, a, b, N, &cpu_result);
-    t2 = std::chrono::high_resolution_clock::now();
-    printf("log_sin_exp: %.10f (%.6f sec)\n", cpu_result,
-           std::chrono::duration<double>(t2 - t1).count());
-
-    printf("\nGPU Results:\n");
-
-    const int THREADS = 256;
-    const int BLOCKS = (N + (THREADS - 1)) / THREADS;
+    int N = (argc > 1) ? atoi(argv[1]) : 100000;  // Default: 10^5
     double dx = (b - a) / N;
 
-    *result = 0.0;
-    t1 = std::chrono::high_resolution_clock::now();
-    naiveRiemannSum<double, sin_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
+    // Allocate device memory
+    double* result_device;
+    cudaMalloc(&result_device, sizeof(double));
+    cudaMemset(result_device, 0, sizeof(double));
+
+    const int THREADS = BLOCK_SIZE;
+    const int BLOCKS = (N + THREADS - 1) / THREADS;
+
+    auto t1 = std::chrono::high_resolution_clock::now();
+    naiveRiemannSum<double, complex_kernel_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result_device);
     cudaDeviceSynchronize();
-    t2 = std::chrono::high_resolution_clock::now();
-    printf("sin_exp: %.10f (%.6f sec)\n", *result,
+    auto t2 = std::chrono::high_resolution_clock::now();
+
+    double result_host;
+    cudaMemcpy(&result_host, result_device, sizeof(double), cudaMemcpyDeviceToHost);
+    printf("complex kernel: %.10f (%.6f sec)\n", result_host,
            std::chrono::duration<double>(t2 - t1).count());
 
-    *result = 0.0;
-    t1 = std::chrono::high_resolution_clock::now();
-    naiveRiemannSum<double, square_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
-    cudaDeviceSynchronize();
-    t2 = std::chrono::high_resolution_clock::now();
-    printf("square: %.10f (%.6f sec)\n", *result,
-           std::chrono::duration<double>(t2 - t1).count());
-
-    *result = 0.0;
-    t1 = std::chrono::high_resolution_clock::now();
-    naiveRiemannSum<double, logarithm_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
-    cudaDeviceSynchronize();
-    t2 = std::chrono::high_resolution_clock::now();
-    printf("log_exp: %.10f (%.6f sec)\n", *result,
-           std::chrono::duration<double>(t2 - t1).count());
-
-    *result = 0.0;
-    t1 = std::chrono::high_resolution_clock::now();
-    naiveRiemannSum<double, logarithm_sin_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
-    cudaDeviceSynchronize();
-    t2 = std::chrono::high_resolution_clock::now();
-    printf("log_sin_exp: %.10f (%.6f sec)\n", *result,
-           std::chrono::duration<double>(t2 - t1).count());
-
-    *result = 0.0;
-    t1 = std::chrono::high_resolution_clock::now();
-    naiveRiemannSum<double, complex_kernel_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
-    cudaDeviceSynchronize();
-    t2 = std::chrono::high_resolution_clock::now();
-    printf("complex kernel: %.10f (%.6f sec)\n", *result,
-            std::chrono::duration<double>(t2 - t1).count());
-       
-
-    cudaFree(result);
+    cudaFree(result_device);
     return 0;
 }
-
