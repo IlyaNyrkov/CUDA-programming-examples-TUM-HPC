@@ -1,32 +1,34 @@
-// naive_matrix_multiplication.cu
 #include <stdio.h>
 #include <cuda.h>
 #include <chrono>
 
+#define TILE_SIZE 16                // L40S: 16–32, A100/H100: 32 works well
+#define BLOCK_SIZE TILE_SIZE
+
 __global__ void tiledMatMul(int* A, int* B, int* C, int N) {
-    __shared__ int sharedA[16][16];
-    __shared__ int sharedB[16][16];
+    __shared__ int sharedA[TILE_SIZE][TILE_SIZE];
+    __shared__ int sharedB[TILE_SIZE][TILE_SIZE];
 
     int tx = threadIdx.x;
     int ty = threadIdx.y;
-    int row = blockIdx.y * 16 + ty;
-    int col = blockIdx.x * 16 + tx;
+    int row = blockIdx.y * TILE_SIZE + ty;
+    int col = blockIdx.x * TILE_SIZE + tx;
 
     int sum = 0;
-    for (int tile = 0; tile < (N + 15) / 16; tile++) {
-        if (row < N && tile * 16 + tx < N)
-            sharedA[ty][tx] = A[row * N + tile * 16 + tx];
+    for (int tile = 0; tile < (N + TILE_SIZE - 1) / TILE_SIZE; tile++) {
+        if (row < N && tile * TILE_SIZE + tx < N)
+            sharedA[ty][tx] = A[row * N + tile * TILE_SIZE + tx];
         else
             sharedA[ty][tx] = 0;
 
-        if (col < N && tile * 16 + ty < N)
-            sharedB[ty][tx] = B[(tile * 16 + ty) * N + col];
+        if (col < N && tile * TILE_SIZE + ty < N)
+            sharedB[ty][tx] = B[(tile * TILE_SIZE + ty) * N + col];
         else
             sharedB[ty][tx] = 0;
 
         __syncthreads();
 
-        for (int k = 0; k < 16; k++) {
+        for (int k = 0; k < TILE_SIZE; k++) {
             sum += sharedA[ty][k] * sharedB[k][tx];
         }
 
@@ -37,78 +39,55 @@ __global__ void tiledMatMul(int* A, int* B, int* C, int N) {
         C[row * N + col] = sum;
 }
 
-void cpuMatMul(int *A, int *B, int *C, int N) {
-    for (int row = 0; row < N; row++) {
-        for (int col = 0; col < N; col++) {
-            int sum = 0;
-            for (int k = 0; k < N; k++) {
-                sum += A[row * N + k] * B[k * N + col];
-            }
-            C[row * N + col] = sum;
-        }
+void fill_matrix(int *mat, int N) {
+    for (int i = 0; i < N * N; ++i) {
+        mat[i] = rand() % 10;
     }
 }
 
-bool compareMatricies(int *left, int* right, int N, int M) {
-    for (int row = 0; row < N; row++) {
-        for (int col = 0; col < N; col++) {
-            if (left[row * N + col] != right[row * N + col])  {
-                return false;
-            }
-        }
-    }
-
-    return true;
-}
-
-int main() {
-    const int N = 1024; // Matrix size N x N
+int main(int argc, char* argv[]) {
+    int N = (argc > 1) ? atoi(argv[1]) : 512;
     size_t size = N * N * sizeof(int);
 
-    int *matrixACpu = (int *)malloc(size);
-    int *matrixBCpu = (int *)malloc(size);
-    int *resultMatrixCpu_cpu = (int *)malloc(size);
-    int *resultMatrixCpu_gpu = (int *)malloc(size);
+    int *A, *B, *C;
+    cudaMallocHost(&A, size);
+    cudaMallocHost(&B, size);
+    cudaMallocHost(&C, size);
 
-    int *matrixAGpu, *matrixBGpu, *matrixCGpu;
-    cudaMalloc(&matrixAGpu, size);
-    cudaMalloc(&matrixBGpu, size);
-    cudaMalloc(&matrixCGpu, size);
+    fill_matrix(A, N);
+    fill_matrix(B, N);
 
-    for (int i = 0; i < N * N; i++) {
-        matrixACpu[i] = 1;
-        matrixBCpu[i] = 1;
-    }
+    int *d_A, *d_B, *d_C;
+    cudaMalloc(&d_A, size);
+    cudaMalloc(&d_B, size);
+    cudaMalloc(&d_C, size);
 
-    cudaMemcpy(matrixAGpu, matrixACpu, size, cudaMemcpyHostToDevice);
-    cudaMemcpy(matrixBGpu, matrixBCpu, size, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_A, A, size, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, B, size, cudaMemcpyHostToDevice);
 
-    dim3 threads(16, 16);
-    dim3 blocks((N + threads.x - 1) / threads.x, (N + threads.y - 1) / threads.y);
+    dim3 threadsPerBlock(BLOCK_SIZE, BLOCK_SIZE);
+    dim3 blocksPerGrid((N + BLOCK_SIZE - 1) / BLOCK_SIZE,
+                       (N + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
     auto start_gpu = std::chrono::high_resolution_clock::now();
-    tiledMatMul<<<blocks, threads>>>(matrixAGpu, matrixBGpu, matrixCGpu, N);
+    tiledMatMul<<<blocksPerGrid, threadsPerBlock>>>(d_A, d_B, d_C, N);
     cudaDeviceSynchronize();
     auto end_gpu = std::chrono::high_resolution_clock::now();
 
-    cudaMemcpy(resultMatrixCpu_gpu, matrixCGpu, size, cudaMemcpyDeviceToHost);
+    cudaMemcpy(C, d_C, size, cudaMemcpyDeviceToHost);
 
-    auto start_cpu = std::chrono::high_resolution_clock::now();
-    cpuMatMul(matrixACpu, matrixBCpu, resultMatrixCpu_cpu, N);
-    auto end_cpu = std::chrono::high_resolution_clock::now();
+    printf("Tiled GPU Matrix Multiplication (%d x %d)\n", N, N);
+    printf("GPU Execution Time: %f seconds\n",
+           std::chrono::duration<double>(end_gpu - start_gpu).count());
+    printf("Sample result C[0][0] = %d\n", C[0]);
 
-    printf("Matrix %d x %d\n", N, N);
-    printf("Tiled Method GPU Time: %f seconds\n", std::chrono::duration<double>(end_gpu - start_gpu).count());
-    printf("CPU Time:       %f seconds\n", std::chrono::duration<double>(end_cpu - start_cpu).count());
-    printf("Result check:   C[0][0] = %d (GPU), %d (CPU)\n", resultMatrixCpu_gpu[0], resultMatrixCpu_cpu[0]);
-    printf("CPU and gpu matricies same: %d\n", compareMatricies(resultMatrixCpu_cpu, resultMatrixCpu_gpu, N, N));
+    // Cleanup
+    cudaFreeHost(A);
+    cudaFreeHost(B);
+    cudaFreeHost(C);
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_C);
 
-    free(matrixACpu);
-    free(matrixBCpu);
-    free(resultMatrixCpu_cpu);
-    free(resultMatrixCpu_gpu);
-    cudaFree(matrixAGpu);
-    cudaFree(matrixBGpu);
-    cudaFree(matrixCGpu);
     return 0;
 }

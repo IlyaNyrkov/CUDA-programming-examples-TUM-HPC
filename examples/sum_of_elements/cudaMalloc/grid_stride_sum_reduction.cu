@@ -32,9 +32,7 @@ __global__ void gridStrideReduction(int *input, int *partialSums, int n) {
 
     int sum = 0;
     while (index < n) {
-        sum += input[index];
-        if (index + blockSize < n)
-            sum += input[index + blockSize];
+        shared[tid] += input[index] + input[index + blockSize]
         index += gridSize;
     }
 
