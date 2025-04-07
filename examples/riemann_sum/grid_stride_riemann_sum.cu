@@ -65,88 +65,30 @@ __global__ void gridStrideRiemannSum(T a, T dx, int N, T *result) {
     atomicAdd(result, sum);
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     const double a = 0.1, b = 10.0;
-    const int N = 1e7;
+    int N = (argc > 1) ? atoi(argv[1]) : 10000000;
 
-    double* result;
-    cudaMallocManaged(&result, sizeof(double));
+    double* d_result;
+    cudaMalloc(&d_result, sizeof(double));
+    cudaMemset(d_result, 0, sizeof(double));
 
-    /*
-    printf("CPU Results:\n");
-
-    double cpu_result;
-    auto t1 = std::chrono::high_resolution_clock::now();
-    left_riemann_cpu(sin_exp, a, b, N, &cpu_result);
-    auto t2 = std::chrono::high_resolution_clock::now();
-    printf("sin_exp: %.10f (%.6f sec)\n", cpu_result,
-           std::chrono::duration<double>(t2 - t1).count());
-
-    t1 = std::chrono::high_resolution_clock::now();
-    left_riemann_cpu(square, a, b, N, &cpu_result);
-    t2 = std::chrono::high_resolution_clock::now();
-    printf("square: %.10f (%.6f sec)\n", cpu_result,
-           std::chrono::duration<double>(t2 - t1).count());
-
-    t1 = std::chrono::high_resolution_clock::now();
-    left_riemann_cpu(logarithm_exp, a, b, N, &cpu_result);
-    t2 = std::chrono::high_resolution_clock::now();
-    printf("log_exp: %.10f (%.6f sec)\n", cpu_result,
-           std::chrono::duration<double>(t2 - t1).count());
-
-    t1 = std::chrono::high_resolution_clock::now();
-    left_riemann_cpu(logarithm_sin_exp, a, b, N, &cpu_result);
-    t2 = std::chrono::high_resolution_clock::now();
-    printf("log_sin_exp: %.10f (%.6f sec)\n", cpu_result,
-           std::chrono::duration<double>(t2 - t1).count());
-    */
-    printf("\nGPU Results:\n");
-
-    const int THREADS = 256;
-    const int BLOCKS = (N + (THREADS - 1)) / THREADS;
+    const int THREADS = BLOCK_SIZE;
+    const int BLOCKS = (N + THREADS - 1) / THREADS;
     double dx = (b - a) / N;
 
-    *result = 0.0;
     auto t1 = std::chrono::high_resolution_clock::now();
-    gridStrideRiemannSum<double, sin_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
+    gridStrideRiemannSum<double, complex_kernel_gpu><<<BLOCKS, THREADS>>>(a, dx, N, d_result);
     cudaDeviceSynchronize();
     auto t2 = std::chrono::high_resolution_clock::now();
-    printf("sin_exp: %.10f (%.6f sec)\n", *result,
+
+    double h_result;
+    cudaMemcpy(&h_result, d_result, sizeof(double), cudaMemcpyDeviceToHost);
+
+    printf("complex kernel result: %.10f\n", h_result);
+    printf("execution time        : %.6f seconds\n",
            std::chrono::duration<double>(t2 - t1).count());
 
-    *result = 0.0;
-    t1 = std::chrono::high_resolution_clock::now();
-    gridStrideRiemannSum<double, square_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
-    cudaDeviceSynchronize();
-    t2 = std::chrono::high_resolution_clock::now();
-    printf("square: %.10f (%.6f sec)\n", *result,
-           std::chrono::duration<double>(t2 - t1).count());
-
-    *result = 0.0;
-    t1 = std::chrono::high_resolution_clock::now();
-    gridStrideRiemannSum<double, logarithm_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
-    cudaDeviceSynchronize();
-    t2 = std::chrono::high_resolution_clock::now();
-    printf("log_exp: %.10f (%.6f sec)\n", *result,
-           std::chrono::duration<double>(t2 - t1).count());
-
-    *result = 0.0;
-    t1 = std::chrono::high_resolution_clock::now();
-    gridStrideRiemannSum<double, logarithm_sin_exp_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
-    cudaDeviceSynchronize();
-    t2 = std::chrono::high_resolution_clock::now();
-    printf("log_sin_exp: %.10f (%.6f sec)\n", *result,
-           std::chrono::duration<double>(t2 - t1).count());
-
-    *result = 0.0;
-    t1 = std::chrono::high_resolution_clock::now();
-    gridStrideRiemannSum<double, complex_kernel_gpu><<<BLOCKS, THREADS>>>(a, dx, N, result);
-    cudaDeviceSynchronize();
-    t2 = std::chrono::high_resolution_clock::now();
-    printf("complex kernel: %.10f (%.6f sec)\n", *result,
-            std::chrono::duration<double>(t2 - t1).count());
-
-    cudaFree(result);
+    cudaFree(d_result);
     return 0;
 }
-
