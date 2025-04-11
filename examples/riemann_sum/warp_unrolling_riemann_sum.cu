@@ -4,30 +4,6 @@
 
 #define BLOCK_SIZE 256
 
-// CPU-side functions
-double sin_exp(double x) {
-    return exp(x) * sin(x);
-}
-double square(double x) {
-    return x * x;
-}
-double logarithm_exp(double x) {
-    return exp(log2(x));
-}
-double logarithm_sin_exp(double x) {
-    return log2(1 + x * x) * sin(exp(x));
-}
-
-template <typename T>
-void left_riemann_cpu(T (*func)(T), T a, T b, int iterations, T* result) {
-    T dx = (b - a) / iterations;
-    *result = 0.0;
-    for (int i = 0; i < iterations; ++i) {
-        T x = a + i * dx;
-        *result += func(x) * dx;
-    }
-}
-
 // GPU-side functions
 template <typename T>
 __device__ T sin_exp_gpu(T x) { return exp(x) * sin(x); }
@@ -48,32 +24,47 @@ __device__ T complex_kernel_gpu(T x) {
     return pow(sin(exp(x) + log(x + 1.0)) + sqrt(x * x + 1.0), 2.5) * cos(5.0 * x) / (1.0 + exp(-x));
 }
 
-
 template <typename T>
 using func_templ = T (*)(T);
 
 template <typename T>
-__inline__ __device__ T warpReduceSum(T val) {
-    for (int offset = 32 / 2; offset > 0; offset /= 2) {
-        val += __shfl_down_sync(0xffffffff, val, offset);
-    }
-    return val;
+__device__ void warpReduceUnrolled(volatile T* s, int tid) {
+    s[tid] += s[tid + 32];
+    s[tid] += s[tid + 16];
+    s[tid] += s[tid + 8];
+    s[tid] += s[tid + 4];
+    s[tid] += s[tid + 2];
+    s[tid] += s[tid + 1];
 }
 
 template <typename T, T (*func)(T)>
-__global__ void warpOptimizedRiemannSum(T a, T dx, int N, T *result) {
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    T sum = 0.0;
+__global__ void warpOptimizedRiemannSum(T a, T dx, int N, T *partial_sums) {
+    extern __shared__ T shared[];
 
-    for (int i = idx; i < N; i += blockDim.x * gridDim.x) {
+    int tid = threadIdx.x;
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+
+    T local_sum = 0.0;
+    for (int i = idx; i < N; i += stride) {
         T x = a + i * dx;
-        sum += func(x) * dx;
+        local_sum += func(x) * dx;
     }
 
-    sum = warpReduceSum(sum);
+    shared[tid] = local_sum;
+    __syncthreads();
 
-    if (threadIdx.x % 32 == 0) {
-        atomicAdd(result, sum);
+    for (int s = blockDim.x / 2; s > 32; s >>= 1) {
+        if (tid < s) shared[tid] += shared[tid + s];
+        __syncthreads();
+    }
+
+    if (tid < 32) {
+        warpReduceUnrolled(shared, tid);
+    }
+
+    if (tid == 0) {
+        partial_sums[blockIdx.x] = shared[0];
     }
 }
 
@@ -82,26 +73,34 @@ int main(int argc, char* argv[]) {
     const double a = 0.1, b = 10.0;
     int N = (argc > 1) ? atoi(argv[1]) : 10000000;
 
-    double *d_result;
-    cudaMalloc(&d_result, sizeof(double));
-    cudaMemset(d_result, 0, sizeof(double));
-
     const int THREADS = BLOCK_SIZE;
-    const int BLOCKS = (N + THREADS - 1) / THREADS;
+    const int BLOCKS = (N + THREADS - 1) /  THREADS;
     double dx = (b - a) / N;
 
+    // Allocate space for partial sums from each block
+    double *d_partial_sums, *h_partial_sums;
+    cudaMalloc(&d_partial_sums, BLOCKS * sizeof(double));
+    h_partial_sums = (double*)malloc(BLOCKS * sizeof(double));
+
     auto start = std::chrono::high_resolution_clock::now();
-    warpOptimizedRiemannSum<double, complex_kernel_gpu><<<BLOCKS, THREADS>>>(a, dx, N, d_result);
+    warpOptimizedRiemannSum<double, complex_kernel_gpu>
+        <<<BLOCKS, THREADS, THREADS * sizeof(double)>>>(a, dx, N, d_partial_sums);
     cudaDeviceSynchronize();
     auto end = std::chrono::high_resolution_clock::now();
 
-    double host_result;
-    cudaMemcpy(&host_result, d_result, sizeof(double), cudaMemcpyDeviceToHost);
+    // Copy partial results and do final sum on CPU
+    cudaMemcpy(h_partial_sums, d_partial_sums, BLOCKS * sizeof(double), cudaMemcpyDeviceToHost);
 
-    printf("complex kernel result: %.10f\n", host_result);
+    double final_result = 0.0;
+    for (int i = 0; i < BLOCKS; ++i) {
+        final_result += h_partial_sums[i];
+    }
+
+    printf("complex kernel result: %.10f\n", final_result);
     printf("execution time        : %.6f seconds\n",
            std::chrono::duration<double>(end - start).count());
 
-    cudaFree(d_result);
+    cudaFree(d_partial_sums);
+    free(h_partial_sums);
     return 0;
 }

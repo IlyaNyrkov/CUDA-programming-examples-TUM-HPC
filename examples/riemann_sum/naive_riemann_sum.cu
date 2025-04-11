@@ -5,20 +5,6 @@
 
 #define BLOCK_SIZE 256
 
-// CPU-side functions
-double sin_exp(double x) {
-    return exp(x) * sin(x);
-}
-double square(double x) {
-    return x * x;
-}
-double logarithm_exp(double x) {
-    return exp(log2(x));
-}
-double logarithm_sin_exp(double x) {
-    return log2(1 + x * x) * sin(exp(x));
-}
-
 template <typename T>
 void left_riemann_cpu(T (*func)(T), T a, T b, int iterations, T* result) {
     T dx = (b - a) / iterations;
