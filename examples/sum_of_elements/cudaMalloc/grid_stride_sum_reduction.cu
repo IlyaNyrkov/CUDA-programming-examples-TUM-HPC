@@ -2,6 +2,8 @@
 #include <iostream>
 #include <chrono>
 #include <cstdlib>
+#include <numeric>
+
 
 using namespace std;
 
@@ -24,32 +26,43 @@ __device__ void warpReduceTemplate(volatile int* s, int tid) {
 }
 
 template <unsigned int blockSize>
-__global__ void gridStrideReduction(int *input, int *partialSums, int n) {
-    extern __shared__ int shared[];
-    int tid = threadIdx.x;
-    int index = blockIdx.x * blockDim.x * 2 + threadIdx.x;
-    int gridSize = blockDim.x * gridDim.x * 2;
-    shared[tid] = 0;
+__global__ void gridStrideReduction(int *in, int *partialSums, int n) {
+    extern __shared__ int subArr[];
+    
+    unsigned int tid = threadIdx.x;
+    unsigned int gid = blockIdx.x * (blockSize*2) + threadIdx.x;
+    unsigned int gridSize = blockDim.x * 2 * gridDim.x;
+    subArr[tid] = 0;
 
-    while (index < n) {
-        shared[tid] += input[index] + input[index + blockSize];
-        index += gridSize;
-    }
-
+    while(gid < n) { 
+        subArr[tid] += in[gid] + in[gid + blockSize]; 
+        gid += gridSize; 
+      }
+  
     __syncthreads();
 
-    if (blockSize >= 512) { if (tid < 256) shared[tid] += shared[tid + 256]; __syncthreads(); }
-    if (blockSize >= 256) { if (tid < 128) shared[tid] += shared[tid + 128]; __syncthreads(); }
-    if (blockSize >= 128) { if (tid < 64)  shared[tid] += shared[tid + 64];  __syncthreads(); }
+    if (blockSize >= 512) { if (tid < 256) subArr[tid] += subArr[tid + 256]; __syncthreads(); }
+    if (blockSize >= 256) { if (tid < 128) subArr[tid] += subArr[tid + 128]; __syncthreads(); }
+    if (blockSize >= 128) { if (tid < 64) subArr[tid] += subArr[tid + 64]; __syncthreads(); }
 
-    if (tid < 32) warpReduceTemplate<blockSize>(shared, tid);
+    if (tid < 32) warpReduceTemplate<blockSize>(subArr, tid);
 
-    if (tid == 0) partialSums[blockIdx.x] = shared[0];
+    if (tid == 0) {
+        partialSums[blockIdx.x] = subArr[0];
+    }
 }
 
+
 int main(int argc, char* argv[]) {
-    int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);  // Default: 268M elements
-    cout << "Summing " << N << " integers using Grid-stride + Warp unroll (GPU only)\n";
+    bool verify = false;
+    int N = (1 << 26);  
+
+    for (int i = 1; i < argc; i++) {
+        if (string(argv[i]) == "--verify") verify = true;
+        else N = atoi(argv[i]);
+    }
+
+    cout << "Summing " << N << " integers using Grid-stride + Warp unroll (GPU only)" << endl;
 
     // --- Host memory allocation
     int* h_input = (int*)malloc(N * sizeof(int));
@@ -70,6 +83,7 @@ int main(int argc, char* argv[]) {
     auto start_gpu = chrono::high_resolution_clock::now();
     gridStrideReduction<THREAD_COUNT><<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT * sizeof(int)>>>(d_input, d_partialSums, N);
     cudaDeviceSynchronize();
+    auto end_gpu = chrono::high_resolution_clock::now();
 
     // --- Copy back results
     int* h_partialSums = (int*)malloc(BLOCK_COUNT * sizeof(int));
@@ -80,11 +94,20 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < BLOCK_COUNT; ++i) {
         gpu_result += h_partialSums[i];
     }
-    auto end_gpu = chrono::high_resolution_clock::now();
     chrono::duration<double> gpu_time = end_gpu - start_gpu;
 
     cout << "GPU Array sum result       : " << gpu_result << endl;
-    cout << "GPU total reduction time   : " << gpu_time.count() << " seconds\n";
+    cout << "GPU total reduction time   : " << gpu_time.count() << " seconds" << endl;
+
+    if (verify) {
+        long long cpu_result = accumulate(h_input, h_input + N, 0LL);
+        cout << "CPU Array sum result       : " << cpu_result << endl;
+        if (cpu_result != gpu_result) {
+            cerr << "ERROR: Mismatch between CPU and GPU results!" << endl;
+        } else {
+            cout << "✅ Results match." << endl;
+        }
+    }
 
     // --- Cleanup
     free(h_input);

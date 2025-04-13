@@ -2,6 +2,8 @@
 #include <iostream>
 #include <chrono>
 #include <cstdlib>
+#include <numeric>
+
 
 using namespace std;
 
@@ -9,22 +11,19 @@ using namespace std;
 
 void fill_array(int N, int* x) {
     for (int i = 0; i < N; i++) {
-        x[i] = rand() % 10;
+        x[i] = rand() % 100;
     }
 }
 
 __global__ void firstAddGlobalLoadReduction(int *in, int *partialSums, int n) {
     extern __shared__ int subArr[];
-    int tid = threadIdx.x;
-    int gid = blockIdx.x * blockDim.x * 2 + threadIdx.x;
-
-    int val1 = (gid < n) ? in[gid] : 0;
-    int val2 = (gid + blockDim.x < n) ? in[gid + blockDim.x] : 0;
-
-    subArr[tid] = val1 + val2;
+    
+    unsigned int tid = threadIdx.x;
+    unsigned int gid = blockIdx.x * (blockDim.x*2) + threadIdx.x;
+    subArr[tid] = in[gid] + in[gid + blockDim.x];
     __syncthreads();
 
-    for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
+    for (unsigned int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
         if (tid < stride) {
             subArr[tid] += subArr[tid + stride];
         }
@@ -37,7 +36,8 @@ __global__ void firstAddGlobalLoadReduction(int *in, int *partialSums, int n) {
 }
 
 int main(int argc, char* argv[]) {
-    int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);  // Default: 268M elements
+    int N = (argc > 1) ? atoi(argv[1]) : (1 << 26);  // Default: 64M ints
+    bool verify_cpu = (argc > 2 && string(argv[2]) == "--verify");
 
     cout << "Summing " << N << " integers using First-Add-Global-Load (GPU-only + CPU final sum)\n";
 
@@ -77,6 +77,22 @@ int main(int argc, char* argv[]) {
     // --- Output results
     cout << "GPU Array sum result       : " << final_sum << endl;
     cout << "GPU total reduction time   : " << gpu_time.count() << " seconds\n";
+
+    if (verify_cpu) {
+        auto start_cpu = chrono::high_resolution_clock::now();
+        long long cpu_sum = accumulate(h_input, h_input + N, 0LL);
+        auto end_cpu = chrono::high_resolution_clock::now();
+        chrono::duration<double> cpu_time = end_cpu - start_cpu;
+
+        cout << "CPU std::accumulate result : " << cpu_sum << endl;
+        cout << "CPU time                   : " << cpu_time.count() << " seconds\n";
+
+        if (cpu_sum != final_sum) {
+            cout << "⚠️ WARNING: GPU and CPU results do not match!" << endl;
+        } else {
+            cout << "✅ GPU result matches CPU!" << endl;
+        }
+    }
 
     // --- Cleanup
     free(h_input);

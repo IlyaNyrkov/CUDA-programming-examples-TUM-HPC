@@ -2,6 +2,8 @@
 #include <iostream>
 #include <chrono>
 #include <cstdlib>
+#include <numeric>
+
 
 using namespace std;
 
@@ -9,21 +11,19 @@ using namespace std;
 
 void fill_array(int N, int* x) {
     for (int i = 0; i < N; i++) {
-        x[i] = rand() % 10;
+        x[i] = rand() % 100;
     }
 }
 
 __global__ void blockSumReduction(int *in, int *out, int n) {
     extern __shared__ int subArray[];
-    int tid = threadIdx.x;
-    int gid = blockIdx.x * blockDim.x * 2 + threadIdx.x;
-
-    subArray[tid] = 0;
-    if (gid < n) subArray[tid] += in[gid];
-    if (gid + blockDim.x < n) subArray[tid] += in[gid + blockDim.x];
+    
+    unsigned int tid = threadIdx.x;
+    unsigned int gid = blockIdx.x * blockDim.x + threadIdx.x;
+    subArray[tid] = in[gid];
     __syncthreads();
 
-    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    for (unsigned int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
         if (tid < stride) {
             subArray[tid] += subArray[tid + stride];
         }
@@ -31,12 +31,13 @@ __global__ void blockSumReduction(int *in, int *out, int n) {
     }
 
     if (tid == 0) {
-        out[blockIdx.x] = subArray[0]; // Write per-block sum
+        out[blockIdx.x] = subArray[0];
     }
 }
 
 int main(int argc, char* argv[]) {
-    int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);  // Default: 268M ints
+    int N = (argc > 1) ? atoi(argv[1]) : (1 << 26);
+    bool verify_cpu = (argc > 2 && string(argv[2]) == "--verify");
 
     cout << "Summing " << N << " integers using GPU (Block-wise shared memory + final CPU sum)\n";
 
@@ -49,7 +50,7 @@ int main(int argc, char* argv[]) {
     cudaMalloc(&d_input, N * sizeof(int));
 
     const int THREAD_COUNT = BLOCK_SIZE;
-    const int BLOCK_COUNT = (N + THREAD_COUNT * 2 - 1) / (THREAD_COUNT * 2);
+    const int BLOCK_COUNT = (N + THREAD_COUNT - 1) / (THREAD_COUNT);
 
     cudaMalloc(&d_partial_sums, BLOCK_COUNT * sizeof(int));
 
@@ -76,6 +77,22 @@ int main(int argc, char* argv[]) {
     // --- Output
     cout << "GPU Array sum result       : " << final_sum << endl;
     cout << "Total GPU reduction time   : " << gpu_time.count() << " seconds\n";
+
+    if (verify_cpu) {
+        auto start_cpu = chrono::high_resolution_clock::now();
+        long long cpu_sum = accumulate(h_input, h_input + N, 0LL);
+        auto end_cpu = chrono::high_resolution_clock::now();
+        chrono::duration<double> cpu_time = end_cpu - start_cpu;
+
+        cout << "CPU std::accumulate result : " << cpu_sum << endl;
+        cout << "CPU time                   : " << cpu_time.count() << " seconds\n";
+
+        if (cpu_sum != final_sum) {
+            cout << "⚠️ WARNING: GPU and CPU results do not match!" << endl;
+        } else {
+            cout << "✅ GPU result matches CPU!" << endl;
+        }
+    }
 
     // --- Cleanup
     free(h_input);

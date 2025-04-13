@@ -2,6 +2,8 @@
 #include <iostream>
 #include <chrono>
 #include <cstdlib>
+#include <numeric>
+
 
 using namespace std;
 
@@ -9,7 +11,7 @@ using namespace std;
 
 void fill_array(int N, int* x) {
     for (int i = 0; i < N; i++) {
-        x[i] = rand() % 10;
+        x[i] = rand() % 100;
     }
 }
 
@@ -25,15 +27,11 @@ __device__ void warpReduceTemplate(volatile int* s, int tid) {
 
 template <unsigned int blockSize>
 __global__ void unrollWarpCompletelyReduction(int *input, int *partialSums, int n) {
-    extern __shared__ int subArray[];
-    int tid = threadIdx.x;
-    int gid = blockIdx.x * blockDim.x * 2 + threadIdx.x;
-
-    int sum = 0;
-    if (gid < n) sum += input[gid];
-    if (gid + blockDim.x < n) sum += input[gid + blockDim.x];
-
-    subArray[tid] = sum;
+    extern __shared__ int subArr[];
+    
+    unsigned int tid = threadIdx.x;
+    unsigned int gid = blockIdx.x * (blockDim.x*2) + threadIdx.x;
+    subArr[tid] = in[gid] + in[gid + blockDim.x];
     __syncthreads();
 
     if (blockSize >= 512) { if (tid < 256) subArray[tid] += subArray[tid + 256]; __syncthreads(); }
@@ -48,56 +46,73 @@ __global__ void unrollWarpCompletelyReduction(int *input, int *partialSums, int 
 }
 
 int main(int argc, char* argv[]) {
-    int N = (argc > 1) ? atoi(argv[1]) : (1 << 28);  // Default: 268M elements
+    int N = (argc > 1) ? atoi(argv[1]) : (1 << 26);
+    bool verify = (argc > 2 && std::string(argv[2]) == "--verify");
+    int blockSize = (argc > 3) ? atoi(argv[3]) : DEFAULT_BLOCK_SIZE;
 
-    if (N <= 0) {
-        cerr << "Invalid number of elements.\n";
+    if (N <= 0 || (blockSize != 128 && blockSize != 256 && blockSize != 512)) {
+        cerr << "Usage: ./prog [N] [--verify] [blockSize: 128|256|512]\n";
         return 1;
     }
 
-    cout << "Summing " << N << " integers using Warp-unrolled reduction (GPU-only)\n";
+    cout << "Summing " << N << " integers using Warp-unrolled reduction (blockSize = " << blockSize << ")\n";
 
-    // Host allocation and fill
     int* h_input = (int*)malloc(N * sizeof(int));
     fill_array(N, h_input);
 
-    // Device allocation
     int *d_input, *d_partialSums;
     cudaMalloc(&d_input, N * sizeof(int));
+    cudaMemcpy(d_input, h_input, N * sizeof(int), cudaMemcpyHostToDevice);
 
-    const int THREAD_COUNT = BLOCK_SIZE;
+    const int THREAD_COUNT = blockSize;
     const int BLOCK_COUNT = (N + THREAD_COUNT * 2 - 1) / (THREAD_COUNT * 2);
     cudaMalloc(&d_partialSums, BLOCK_COUNT * sizeof(int));
 
-    // Copy data to device
-    cudaMemcpy(d_input, h_input, N * sizeof(int), cudaMemcpyHostToDevice);
-
-    // Launch kernel and measure time
     auto start_gpu = chrono::high_resolution_clock::now();
-    unrollWarpCompletelyReduction<THREAD_COUNT><<<BLOCK_COUNT, THREAD_COUNT, THREAD_COUNT * sizeof(int)>>>(d_input, d_partialSums, N);
-    cudaDeviceSynchronize();
 
-    // Copy results back
+    switch (blockSize) {
+        case 128:
+            unrollWarpCompletelyReduction<128><<<BLOCK_COUNT, 128, 128 * sizeof(int)>>>(d_input, d_partialSums, N);
+            break;
+        case 256:
+            unrollWarpCompletelyReduction<256><<<BLOCK_COUNT, 256, 256 * sizeof(int)>>>(d_input, d_partialSums, N);
+            break;
+        case 512:
+            unrollWarpCompletelyReduction<512><<<BLOCK_COUNT, 512, 512 * sizeof(int)>>>(d_input, d_partialSums, N);
+            break;
+    }
+
+    cudaDeviceSynchronize();
+    auto end_gpu = chrono::high_resolution_clock::now();
+
     int* h_partialSums = (int*)malloc(BLOCK_COUNT * sizeof(int));
     cudaMemcpy(h_partialSums, d_partialSums, BLOCK_COUNT * sizeof(int), cudaMemcpyDeviceToHost);
 
-    // Final reduction on CPU
     long long final_sum = 0;
-    for (int i = 0; i < BLOCK_COUNT; i++) {
-        final_sum += h_partialSums[i];
-    }
-    auto end_gpu = chrono::high_resolution_clock::now();
-    chrono::duration<double> gpu_time = end_gpu - start_gpu;
+    for (int i = 0; i < BLOCK_COUNT; i++) final_sum += h_partialSums[i];
 
-    // Print result
+    chrono::duration<double> gpu_time = end_gpu - start_gpu;
     cout << "GPU Array sum result      : " << final_sum << endl;
     cout << "GPU total reduction time  : " << gpu_time.count() << " seconds\n";
 
-    // Cleanup
-    free(h_input);
-    free(h_partialSums);
+    if (verify) {
+        auto start_cpu = chrono::high_resolution_clock::now();
+        long long cpu_sum = accumulate(h_input, h_input + N, 0LL);
+        auto end_cpu = chrono::high_resolution_clock::now();
+        chrono::duration<double> cpu_time = end_cpu - start_cpu;
+
+        cout << "CPU Accumulate sum        : " << cpu_sum << endl;
+        cout << "CPU sum time              : " << cpu_time.count() << " seconds\n";
+
+        if (cpu_sum != final_sum)
+            cout << "⚠️ MISMATCH: CPU and GPU results differ!\n";
+        else
+            cout << "✅ CPU and GPU results match.\n";
+    }
+
     cudaFree(d_input);
     cudaFree(d_partialSums);
-
+    free(h_input);
+    free(h_partialSums);
     return 0;
 }
