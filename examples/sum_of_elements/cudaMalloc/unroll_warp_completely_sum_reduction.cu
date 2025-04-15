@@ -7,7 +7,7 @@
 
 using namespace std;
 
-#define BLOCK_SIZE 256  // L40S/H100 optimal: 256–512
+#define DEFAULT_BLOCK_SIZE 256  // L40S/H100 optimal: 256–512
 
 void fill_array(int N, int* x) {
     for (int i = 0; i < N; i++) {
@@ -26,7 +26,7 @@ __device__ void warpReduceTemplate(volatile int* s, int tid) {
 }
 
 template <unsigned int blockSize>
-__global__ void unrollWarpCompletelyReduction(int *input, int *partialSums, int n) {
+__global__ void unrollWarpCompletelyReduction(int *in, int *partialSums, int n) {
     extern __shared__ int subArr[];
     
     unsigned int tid = threadIdx.x;
@@ -34,14 +34,14 @@ __global__ void unrollWarpCompletelyReduction(int *input, int *partialSums, int 
     subArr[tid] = in[gid] + in[gid + blockDim.x];
     __syncthreads();
 
-    if (blockSize >= 512) { if (tid < 256) subArray[tid] += subArray[tid + 256]; __syncthreads(); }
-    if (blockSize >= 256) { if (tid < 128) subArray[tid] += subArray[tid + 128]; __syncthreads(); }
-    if (blockSize >= 128) { if (tid < 64) subArray[tid] += subArray[tid + 64]; __syncthreads(); }
+    if (blockSize >= 512) { if (tid < 256) subArr[tid] += subArr[tid + 256]; __syncthreads(); }
+    if (blockSize >= 256) { if (tid < 128) subArr[tid] += subArr[tid + 128]; __syncthreads(); }
+    if (blockSize >= 128) { if (tid < 64) subArr[tid] += subArr[tid + 64]; __syncthreads(); }
 
-    if (tid < 32) warpReduceTemplate<blockSize>(subArray, tid);
+    if (tid < 32) warpReduceTemplate<blockSize>(subArr, tid);
 
     if (tid == 0) {
-        partialSums[blockIdx.x] = subArray[0];
+        partialSums[blockIdx.x] = subArr[0];
     }
 }
 
