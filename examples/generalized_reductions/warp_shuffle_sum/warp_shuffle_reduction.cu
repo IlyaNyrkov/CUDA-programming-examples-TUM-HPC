@@ -518,9 +518,14 @@ std::tuple<int, float> benchmarkKernel(Kernel kernel, int *dev_input_data, int *
 
     // Start timing
     cudaEventRecord(start);
+
+    // Launch the reduction kernel
     kernel<<<numBlocks, blockSize>>>(dev_input_data, dev_partial_sums, n);
+
+    // Launch the final reduction kernel
     finalReductionVectorized<<<1, 32>>>(dev_partial_sums, dev_result, numBlocks);
-    cudaDeviceSynchronize();
+
+    // Stop timing immediately after the final kernel launch
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
 
@@ -627,7 +632,8 @@ int main() {
 
     cudaEventRecord(start);
     cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, dev_input_data, dev_cub_result, n);
-    cudaDeviceSynchronize();
+
+    // Stop timing immediately after the CUB kernel launch
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
 
