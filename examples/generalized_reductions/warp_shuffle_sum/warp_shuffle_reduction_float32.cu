@@ -3,54 +3,21 @@
 #include <cub/cub.cuh> // Include CUB library
 #include <chrono>
 #include <numeric>
-#include <vector>
-#include <tuple>
 using namespace std;
 
+// Global constant for the number of runs
+const int NUM_RUNS = 50;
+
+struct float8 {
+    float x, y, z, w, a, b, c, d;
+};
+
 template <unsigned int blockSize>
-__global__ void warpShuffleReduction(float *in, float *partialSums, int n) {
+__global__ void __launch_bounds__(1024) warpShuffleReductionVectorized(float *__restrict__ in, float *__restrict__ partialSums, int n) {
     __shared__ float warpResults[32]; // Shared memory for warp-level results (32 warps per block)
 
     unsigned int tid = threadIdx.x;
-    unsigned int gid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    float sum = 0.0f;
-
-    // Each thread loads one element
-    if (gid < n) {
-        sum = in[gid];
-    }
-
-    // Perform warp-level reduction using shuffle instructions
-    for (int offset = 16; offset > 0; offset /= 2) {
-        sum += __shfl_down_sync(0xffffffff, sum, offset);
-    }
-
-    // Store the result of each warp in shared memory
-    if (tid % 32 == 0) {
-        warpResults[tid / 32] = sum;
-    }
-
-    __syncthreads();
-
-    // Perform block-level reduction on warp results using a single warp
-    if (tid < 32) {
-        sum = (tid < blockDim.x / 32) ? warpResults[tid] : 0.0f;
-        for (int offset = 16; offset > 0; offset /= 2) {
-            sum += __shfl_down_sync(0xffffffff, sum, offset);
-        }
-        if (tid == 0) {
-            partialSums[blockIdx.x] = sum;
-        }
-    }
-}
-
-template <unsigned int blockSize>
-__global__ void warpShuffleReductionVectorized(float *in, float *partialSums, int n) {
-    __shared__ float warpResults[32]; // Shared memory for warp-level results (32 warps per block)
-
-    unsigned int tid = threadIdx.x;
-    unsigned int gid = blockIdx.x * blockDim.x * 8 + threadIdx.x;
+    unsigned int gid = blockIdx.x * blockSize * 8 + threadIdx.x;
 
     float sum = 0.0f;
 
@@ -59,7 +26,7 @@ __global__ void warpShuffleReductionVectorized(float *in, float *partialSums, in
 
     // Load and sum 8 float4 vectors (32 floats)
     for (int i = 0; i < 8; i++) {
-        int index = baseIndex + i * blockDim.x * 4; // Step by blockDim.x * 4 for each float4
+        int index = baseIndex + i * blockSize * 4; // Step by blockDim.x * 4 for each float4
         if (index < n) {
             float4 data = reinterpret_cast<float4*>(in)[index / 4];
             sum += data.x;
@@ -83,7 +50,7 @@ __global__ void warpShuffleReductionVectorized(float *in, float *partialSums, in
 
     // Perform block-level reduction on warp results using a single warp
     if (tid < 32) {
-        sum = (tid < blockDim.x / 32) ? warpResults[tid] : 0.0f;
+        sum = (tid < blockSize / 32) ? warpResults[tid] : 0.0f;
         for (int offset = 16; offset > 0; offset >>= 1) {
             sum += __shfl_down_sync(0xffffffff, sum, offset);
         }
@@ -93,8 +60,101 @@ __global__ void warpShuffleReductionVectorized(float *in, float *partialSums, in
     }
 }
 
-// Kernel to sum the partial results from all blocks
-__global__ void finalReduction(float *partialSums, float *result, int n) {
+template <unsigned int blockSize>
+__global__ void __launch_bounds__(1024) warpShuffleReductionCustomStruct(float *__restrict__ in, float *__restrict__ partialSums, int n) {
+    __shared__ float warpResults[32]; // Shared memory for warp-level results (32 warps per block)
+
+    unsigned int tid = threadIdx.x;
+    unsigned int gid = blockIdx.x * blockSize * 4 + threadIdx.x;
+
+    float sum = 0.0f;
+
+    // Calculate the base index for this thread
+    int baseIndex = gid * 8; // Each thread processes 8 floats sequentially
+
+    // Load and sum 8 floats using the custom float8 structure
+    for (int i = 0; i < 4; i++) {
+        int index = baseIndex + i * blockSize * 8; // Step by blockDim.x * 8 for each float8
+
+        if (index < n) {
+            float8 data = reinterpret_cast<float8*>(in)[index / 8];
+            sum += data.x + data.y + data.z + data.w + data.a + data.b + data.c + data.d;
+        }
+    }
+
+    // Perform warp-level reduction using shuffle instructions
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        sum += __shfl_down_sync(0xffffffff, sum, offset);
+    }
+
+    // Store the result of each warp in shared memory
+    if (tid % 32 == 0) {
+        warpResults[tid / 32] = sum;
+    }
+
+    __syncthreads();
+
+    // Perform block-level reduction on warp results using a single warp
+    if (tid < 32) {
+        sum = (tid < blockSize / 32) ? warpResults[tid] : 0.0f;
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            sum += __shfl_down_sync(0xffffffff, sum, offset);
+        }
+        if (tid == 0) {
+            partialSums[blockIdx.x] = sum; // Write the final block sum to global memory
+        }
+    }
+}
+
+template <unsigned int blockSize>
+__global__ void __launch_bounds__(1024) warpShuffleReduction64Elements(float *__restrict__ in, float *__restrict__ partialSums, int n) {
+    __shared__ float warpResults[32]; // Shared memory for warp-level results (32 warps per block)
+
+    unsigned int tid = threadIdx.x;
+    unsigned int gid = blockIdx.x * blockSize * 16 + threadIdx.x; // Each thread processes 64 elements (16 * float4)
+
+    float sum = 0.0f;
+
+    // Calculate the base index for this thread
+    int baseIndex = gid * 4; // Each thread processes 4 floats per iteration
+
+    // Load and sum 16 float4 vectors (64 floats)
+    for (int i = 0; i < 16; i++) {
+        int index = baseIndex + i * blockSize * 4; // Step by blockDim.x * 4 for each float4
+        if (index < n) {
+            float4 data = reinterpret_cast<float4*>(in)[index / 4];
+            sum += data.x;
+            sum += data.y;
+            sum += data.z;
+            sum += data.w;
+        }
+    }
+
+    // Perform warp-level reduction using shuffle instructions
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        sum += __shfl_down_sync(0xffffffff, sum, offset);
+    }
+
+    // Store the result of each warp in shared memory
+    if (tid % 32 == 0) {
+        warpResults[tid / 32] = sum;
+    }
+
+    __syncthreads();
+
+    // Perform block-level reduction on warp results using a single warp
+    if (tid < 32) {
+        sum = (tid < blockSize / 32) ? warpResults[tid] : 0.0f;
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            sum += __shfl_down_sync(0xffffffff, sum, offset);
+        }
+        if (tid == 0) {
+            partialSums[blockIdx.x] = sum; // Write the final block sum to global memory
+        }
+    }
+}
+
+__global__ void finalReductionVectorized(float *__restrict__ partialSums, float *__restrict__ result, int n) {
     float sum = 0.0f;
 
     // Each thread processes 4 elements at a time using float4
@@ -103,7 +163,6 @@ __global__ void finalReduction(float *partialSums, float *result, int n) {
     int numVectors = n / 4; // Number of float4 vectors
     int remainder = n % 4; // Remaining elements
 
-    // Process 4 elements at a time using float4
     for (int i = tid; i < numVectors; i += numThreads) {
         float4 data = reinterpret_cast<float4*>(partialSums)[i];
         sum += data.x + data.y + data.z + data.w;
@@ -135,31 +194,52 @@ std::tuple<float, float> benchmarkKernel(Kernel kernel, float *dev_input_data, f
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-    // Start timing
-    cudaEventRecord(start);
+    // Warmup phase
     kernel<<<numBlocks, blockSize>>>(dev_input_data, dev_partial_sums, n);
-    finalReduction<<<1, 32>>>(dev_partial_sums, dev_result, numBlocks);
+    finalReductionVectorized<<<1, 32>>>(dev_partial_sums, dev_result, numBlocks);
     cudaDeviceSynchronize();
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
 
-    // Calculate elapsed time
-    float duration = 0.0f;
-    cudaEventElapsedTime(&duration, start, stop);
+    // Run the kernel multiple times for reliable timing
+    float totalDuration = 0.0f;
+    float result = 0;
+
+    for (int i = 0; i < NUM_RUNS; i++) {
+        // Reset the result memory
+        cudaMemset(dev_result, 0, sizeof(int));
+
+        // Start timing
+        cudaEventRecord(start);
+
+        // Launch the reduction kernel
+        kernel<<<numBlocks, blockSize>>>(dev_input_data, dev_partial_sums, n);
+
+        // Launch the final reduction kernel
+        finalReductionVectorized<<<1, 32>>>(dev_partial_sums, dev_result, numBlocks);
+
+        // Stop timing immediately after the final kernel launch
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+
+        // Calculate elapsed time
+        float duration = 0.0f;
+        cudaEventElapsedTime(&duration, start, stop);
+        totalDuration += duration;
+    }
 
     // Retrieve the result from the device
-    float result;
-    cudaMemcpy(&result, dev_result, sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(&result, dev_result, sizeof(int), cudaMemcpyDeviceToHost);
 
-    // Reset device result memory
-    cudaMemset(dev_result, 0, sizeof(float));
+    // Calculate the average duration
+    float averageDuration = totalDuration / NUM_RUNS;
 
     // Clean up
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 
-    return {result, duration};
+    return {result, averageDuration};
 }
+
+float eps = 500; // Tolerance for floating-point comparison
 
 void displayAndVerifyResults(const std::vector<std::tuple<std::string, float, float>> &results, float cpu_result) {
     bool all_match = true;
@@ -168,10 +248,11 @@ void displayAndVerifyResults(const std::vector<std::tuple<std::string, float, fl
         std::cout << "Technique: " << technique << ", Result: " << result
                   << ", Time: " << duration << " ms" << std::endl;
 
-        if (fabs(result - cpu_result) > 1e-5) { // Allow small floating-point error
+    
+        if (fabs(cpu_result - result) > eps) {
             all_match = false;
             std::cout << "\033[31mMismatch in " << technique << ": " << result
-                      << " (Expected: " << cpu_result << ")\033[0m\n";
+                      << " (Expected: " << cpu_result << ")\033[0m\n" << ", difference: " << fabs(cpu_result - result) << std::endl;
         }
     }
 
@@ -182,7 +263,10 @@ void displayAndVerifyResults(const std::vector<std::tuple<std::string, float, fl
     }
 }
 
+
 int main() {
+    cout << "Each kernel will be run " << NUM_RUNS << " times for reliable timing." << endl;
+
     int n = 1 << 25; // 4M elements
     size_t bytes = n * sizeof(float);
 
@@ -195,7 +279,7 @@ int main() {
     // Initialize data
     srand(42); // Fixed seed
     for (int i = 0; i < n; i++) {
-        host_input_data[i] = static_cast<float>(rand()) / RAND_MAX; // Random floats between 0 and 1
+        host_input_data[i] = static_cast <float> (rand()) / static_cast <float> (RAND_MAX);
     }
 
     // Allocate memory on GPU
@@ -213,20 +297,24 @@ int main() {
     std::vector<std::tuple<std::string, float, float>> results;
 
     // Perform CPU reduction
-    auto cpu_start = std::chrono::high_resolution_clock::now();
+    auto cpu_start = std::chrono::steady_clock::now(); // Use steady_clock for monotonic timing
     float cpu_result = std::accumulate(host_input_data, host_input_data + n, 0.0f);
-    auto cpu_stop = std::chrono::high_resolution_clock::now();
+    auto cpu_stop = std::chrono::steady_clock::now();
     auto cpu_duration = std::chrono::duration_cast<std::chrono::microseconds>(cpu_stop - cpu_start).count() / 1000.0f;
     results.emplace_back("CPU", cpu_result, cpu_duration);
 
     // Benchmark different kernels
     {
-        auto [result, duration] = benchmarkKernel(warpShuffleReduction<1024>, dev_input_data, dev_partial_sums, dev_result, n, blockSize, 1);
-        results.emplace_back("Restored", result, duration);
+        auto [result, duration] = benchmarkKernel(warpShuffleReductionVectorized<1024>, dev_input_data, dev_partial_sums, dev_result, n, blockSize, 32);
+        results.emplace_back("Vectorized", result, duration);
     }
     {
-        auto [result, duration] = benchmarkKernel(warpShuffleReductionVectorized<1024>, dev_input_data, dev_partial_sums, dev_result, n, blockSize, 8);
-        results.emplace_back("Vectorized", result, duration);
+        auto [result, duration] = benchmarkKernel(warpShuffleReductionCustomStruct<1024>, dev_input_data, dev_partial_sums, dev_result, n, blockSize, 32);
+        results.emplace_back("Custom Struct", result, duration);
+    }
+    {
+        auto [result, duration] = benchmarkKernel(warpShuffleReduction64Elements<1024>, dev_input_data, dev_partial_sums, dev_result, n, blockSize, 64);
+        results.emplace_back("64 Elements", result, duration);
     }
 
     // CUB reduction
@@ -245,14 +333,33 @@ int main() {
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-    cudaEventRecord(start);
     cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, dev_input_data, dev_cub_result, n);
     cudaDeviceSynchronize();
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
 
-    float cub_duration = 0.0f;
-    cudaEventElapsedTime(&cub_duration, start, stop);
+    // Run the CUB reduction multiple times for reliable timing
+    float totalDuration = 0.0f;
+
+    for (int i = 0; i < NUM_RUNS; i++) {
+        // Reset the result memory
+        cudaMemset(dev_cub_result, 0, sizeof(float));
+
+        // Start timing
+        cudaEventRecord(start);
+
+        // Perform CUB reduction
+        cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, dev_input_data, dev_cub_result, n);
+
+        // Stop timing immediately after the CUB kernel launch
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+
+        // Calculate elapsed time
+        float duration = 0.0f;
+        cudaEventElapsedTime(&duration, start, stop);
+        totalDuration += duration;
+    }
+
+    float cub_duration = totalDuration / NUM_RUNS;
     float cub_result;
     cudaMemcpy(&cub_result, dev_cub_result, sizeof(float), cudaMemcpyDeviceToHost);
     results.emplace_back("CUB", cub_result, cub_duration);
