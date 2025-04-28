@@ -516,35 +516,50 @@ std::tuple<int, float> benchmarkKernel(Kernel kernel, int *dev_input_data, int *
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-    // Start timing
-    cudaEventRecord(start);
-
-    // Launch the reduction kernel
+    // Warmup phase
     kernel<<<numBlocks, blockSize>>>(dev_input_data, dev_partial_sums, n);
-
-    // Launch the final reduction kernel
     finalReductionVectorized<<<1, 32>>>(dev_partial_sums, dev_result, numBlocks);
+    cudaDeviceSynchronize();
 
-    // Stop timing immediately after the final kernel launch
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
+    // Run the kernel multiple times for reliable timing
+    const int numRuns = 20;
+    float totalDuration = 0.0f;
+    int result = 0;
 
-    // Calculate elapsed time
-    float duration = 0.0f;
-    cudaEventElapsedTime(&duration, start, stop);
+    for (int i = 0; i < numRuns; i++) {
+        // Reset the result memory
+        cudaMemset(dev_result, 0, sizeof(int));
+
+        // Start timing
+        cudaEventRecord(start);
+
+        // Launch the reduction kernel
+        kernel<<<numBlocks, blockSize>>>(dev_input_data, dev_partial_sums, n);
+
+        // Launch the final reduction kernel
+        finalReductionVectorized<<<1, 32>>>(dev_partial_sums, dev_result, numBlocks);
+
+        // Stop timing immediately after the final kernel launch
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+
+        // Calculate elapsed time
+        float duration = 0.0f;
+        cudaEventElapsedTime(&duration, start, stop);
+        totalDuration += duration;
+    }
 
     // Retrieve the result from the device
-    int result;
     cudaMemcpy(&result, dev_result, sizeof(int), cudaMemcpyDeviceToHost);
 
-    // Reset device result memory
-    cudaMemset(dev_result, 0, sizeof(int));
+    // Calculate the average duration
+    float averageDuration = totalDuration / numRuns;
 
     // Clean up
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 
-    return {result, duration};
+    return {result, averageDuration};
 }
 
 int main() {
@@ -578,9 +593,9 @@ int main() {
     std::vector<std::tuple<std::string, int, float>> results;
 
     // Perform CPU reduction
-    auto cpu_start = std::chrono::high_resolution_clock::now();
+    auto cpu_start = std::chrono::steady_clock::now(); // Use steady_clock for monotonic timing
     int cpu_result = std::accumulate(host_input_data, host_input_data + n, 0);
-    auto cpu_stop = std::chrono::high_resolution_clock::now();
+    auto cpu_stop = std::chrono::steady_clock::now();
     auto cpu_duration = std::chrono::duration_cast<std::chrono::microseconds>(cpu_stop - cpu_start).count() / 1000.0;
     results.emplace_back("CPU", cpu_result, cpu_duration);
 
