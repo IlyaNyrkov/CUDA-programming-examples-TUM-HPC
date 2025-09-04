@@ -1,7 +1,5 @@
 # CUDA-programming-examples-TUM-HPC
 
-![CUDA][cuda-shield] ![C++][cpp-shield] ![Linux][linux-shield]
-
 This repository contains a collection of CUDA programs developed for an educational article and the TUM High Performance Computing (HPC) course. The examples demonstrate core CUDA concepts, performance optimization techniques, and GPU-accelerated computation through small, focused programs.
 
 ## Structure
@@ -24,7 +22,7 @@ This repository contains a collection of CUDA programs developed for an educatio
 
 ---
 
-## 🛠️ Compiler Options
+## Compiler Options
 
 Some programs require special flags:
 
